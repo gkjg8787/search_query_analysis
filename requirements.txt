@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+nodriver
+sqlmodel
+aiosqlite
+structlog
+bs4
+google-genai
+lxml
