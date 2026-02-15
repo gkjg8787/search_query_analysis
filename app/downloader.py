@@ -324,7 +324,7 @@ async def get_search_query_result(req: SearchURLAnalysisRequest):
                 logger.exception(f"Error saving cookies to file: {e}")
 
         generate_searchbox_info_result = await generate_searchbox_info(html_content)
-        logger.debug(
+        logger.info(
             f"generate_searchbox_info_result : {generate_searchbox_info_result.model_dump()}"
         )
         if isinstance(generate_searchbox_info_result, AskGeminiErrorInfo):
@@ -354,12 +354,12 @@ async def get_search_query_result(req: SearchURLAnalysisRequest):
                 generate_searchbox_info_result.search_input_box
             )
 
-        except Exception:
-            logger.exception("Failed to find or interact with search box")
+        except Exception as e:
+            logger.exception(f"Failed to find or interact with search box: {e}")
             return False, SearchURLAnalysisResponse(
                 error=ErrorDetail(
-                    error_type="SearchBoxInteractionError",
-                    error_msg="Failed to find or interact with search box",
+                    error_type=f"SearchBoxInteractionError: {type(e).__name__}",
+                    error_msg=f"Failed to find or interact with search box: {e}",
                 )
             )
 
@@ -372,21 +372,26 @@ async def get_search_query_result(req: SearchURLAnalysisRequest):
             f"searchword: {search_keyword}, Active element info: {active_element_info}"
         )
         try:
-            search_btn = await page.select("#btn-search")
+            search_btn = await page.select(generate_searchbox_info_result.search_button)
             await search_btn.mouse_click()
-        except Exception:
-            logger.exception("Failed to click search button")
+        except Exception as e:
+            logger.exception(f"Failed to click search button: {e}")
             return False, SearchURLAnalysisResponse(
                 error=ErrorDetail(
-                    error_type="SearchButtonInteractionError",
-                    error_msg="Failed to find or interact with search button",
+                    error_type=f"SearchButtonInteractionError: {type(e).__name__}",
+                    error_msg=f"Failed to find or interact with search button: {e}",
                 )
             )
 
         await asyncio.sleep(DEFAULT_WAIT_TIME["after_search"])
 
         search_content = await page.get_content()
-        after_search_options = {}
+
+        input_search_options = (
+            generate_searchbox_info_result.search_options.model_dump()
+            if generate_searchbox_info_result.search_options
+            else None
+        )
         if req.analysis_scope == "all":
             after_generate_searchbox_info_result = await generate_searchbox_info(
                 search_content
@@ -400,17 +405,45 @@ async def get_search_query_result(req: SearchURLAnalysisRequest):
                 )
                 and after_generate_searchbox_info_result.search_options
             ):
-                after_search_options = (
-                    after_generate_searchbox_info_result.search_options
-                )
+                if input_search_options:
+                    # 入力前の検索オプションと、検索後の検索オプションをマージして、検索クエリ生成に渡す
+                    if (
+                        input_search_options["category"]
+                        and after_generate_searchbox_info_result.search_options.category
+                        and input_search_options["category"]["tag_type"]
+                        == after_generate_searchbox_info_result.search_options.category.tag_type
+                        and input_search_options["category"]["query_name"]
+                        == after_generate_searchbox_info_result.search_options.category.query_name
+                    ):
+                        # カテゴリーが両方にある場合は、検索後のカテゴリー情報を優先する
+                        input_search_options["category"] = (
+                            after_generate_searchbox_info_result.search_options.category.model_dump()
+                        )
+                        logger.info(
+                            "Search options category matched between before and after search, using after search options",
+                            category=input_search_options["category"],
+                        )
+                    else:
+                        logger.warning(
+                            "Search options category mismatch between before and after search, using before search options",
+                            before_category=input_search_options.get("category"),
+                            after_category=after_generate_searchbox_info_result.search_options.category.model_dump(),
+                        )
+                else:
+                    input_search_options = (
+                        after_generate_searchbox_info_result.search_options.model_dump()
+                    )
+                    logger.info(
+                        "Search options category matched between before and after search, using after search options",
+                        category=input_search_options["category"],
+                    )
 
         after_search_url = page.url
         search_query_res = await generate_search_query(
             before_search_url=top_page_url,
             after_search_url=after_search_url,
             searchword=search_keyword,
-            search_options=generate_searchbox_info_result.search_options
-            | after_search_options,
+            search_options=input_search_options,
         )
         if isinstance(search_query_res, AskGeminiErrorInfo):
             return False, SearchURLAnalysisResponse(
@@ -454,11 +487,6 @@ async def get_search_query_result(req: SearchURLAnalysisRequest):
             )
         )
     finally:
-        if page:
-            try:
-                await page.close()
-            except Exception:
-                logger.exception("page close error")
         if browser:
             try:
                 browser.stop()

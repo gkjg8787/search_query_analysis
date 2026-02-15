@@ -67,9 +67,9 @@ class SearchURLAnalysisRequest(BaseModel):
 
 
 class QueryOptionValue(BaseModel):
-    value: str = Field(description="Value of the query parameter")
+    value: str = Field(description="Value of the query parameter", max_length=50)
     text: Optional[str] = Field(
-        default=None, description="Description of the query value"
+        default=None, description="Description of the query value", max_length=100
     )
 
 
@@ -80,7 +80,26 @@ class QueryOption(BaseModel):
         description="List of possible values for the query parameter",
     )
     description: Optional[str] = Field(
-        default=None, description="Description of the query option"
+        default=None, description="Description of the query option", max_length=100
+    )
+
+
+class SearchCategoryOption(BaseModel):
+    tag_type: str = Field(description="Type of the tag (e.g., 'select', 'input')")
+    query_name: Optional[str] = Field(
+        default=None,
+        description="Name of the query parameter associated with this category",
+    )
+    options: list[QueryOptionValue] = Field(
+        default_factory=list,
+        description="List of possible values for this category",
+    )
+
+
+class SearchBoxFilterOptions(BaseModel):
+    category: Optional[SearchCategoryOption] = Field(
+        default=None,
+        description="Category of the search box (e.g., 'e-commerce', 'news', 'general')",
     )
 
 
@@ -91,10 +110,12 @@ class GeminiSearchBoxResponse(BaseModel):
     search_button: str = Field(
         default="", description="CSS selector for the search button"
     )
-    search_options: dict = Field(
-        default_factory=dict, description="Additional search options"
+    search_options: SearchBoxFilterOptions | None = Field(
+        default=None, description="Additional search options"
     )
-    error_msg: str = Field(default="", description="Error message, if any")
+    error_msg: str = Field(
+        default="", description="Error message, if any", max_length=500
+    )
 
 
 class SearchURLInfo(BaseModel):
@@ -122,14 +143,24 @@ class AskGeminiErrorInfo(BaseModel):
 
 
 class GeminiSearchURLAnalysisResponse(BaseModel):
-    site_top_url: str = Field(default="", description="Top URL of the site")
-    search_dir: str = Field(default="", description="Search directory path")
-    search_fixed_query: str = Field(default="", description="Search fixed query")
+    site_top_url: str = Field(
+        default="", description="Top URL of the site", max_length=200
+    )
+    search_dir: str = Field(
+        default="", description="Search directory path", max_length=200
+    )
+    search_fixed_query: str = Field(
+        default="", description="Search fixed query", max_length=200
+    )
     search_url_type: Literal["query", "directory", "other"] = Field(
         default="other", description="Type of search URL"
     )
-    query_param: str = Field(default="", description="Query parameter for search")
-    encoding: str = Field(default="", description="Encoding used in the URL")
+    query_param: str = Field(
+        default="", description="Query parameter for search", max_length=50
+    )
+    encoding: str = Field(
+        default="", description="Encoding used in the URL", max_length=50
+    )
     query_options: list[QueryOption] = Field(
         default_factory=list, description="Query options extracted from the URL"
     )

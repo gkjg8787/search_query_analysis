@@ -1,7 +1,9 @@
+import asyncio
 import pathlib
 import json
 
 from bs4 import BeautifulSoup
+from pydantic import ValidationError
 from google import genai
 from google.genai import types, errors
 import structlog
@@ -122,26 +124,61 @@ async def html_to_minimal_dict_for_searchbox(
     return await _element_to_minimal_dict(body, text_limit)
 
 
-async def _request_gemini(client, response_model, contents):
+async def _request_gemini(
+    client,
+    response_model,
+    contents,
+):
     for gmodel in MODEL_ESCALATION_LIST:
-        try:
-            response = await client.aio.models.generate_content(
-                model=gmodel,
-                contents=contents,
-                config={
-                    "response_mime_type": "application/json",
-                    "response_json_schema": response_model.model_json_schema(),
-                },
-            )
-            return response_model.model_validate_json(response.text)
+        # 503などの一時的なエラーのために最大2回リトライ
+        for attempt in range(2):
+            try:
+                response = await client.aio.models.generate_content(
+                    model=gmodel,
+                    contents=contents,
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json",
+                        response_json_schema=response_model.model_json_schema(),
+                    ),
+                )
+                return response_model.model_validate_json(response.text)
 
-        except errors.APIError as e:
-            if e.code == 429:
-                logger.warning(f"Escalte from {gmodel} to the next model")
-                continue
-            return AskGeminiErrorInfo(error_type=type(e).__name__, error=e.message)
-        except Exception as e:
-            return AskGeminiErrorInfo(error_type=type(e).__name__, error=str(e))
+            except errors.APIError as e:
+                # 503 (過負荷) なら、少し待ってリトライ（モデルは変えない）
+                if e.code == 503 or "overloaded" in e.message.lower():
+                    wait_time = (attempt + 1) * 2  # 2秒, 4秒...と待機
+                    logger.warning(
+                        f"503 Overloaded: Retrying {gmodel} in {wait_time}s..."
+                    )
+                    await asyncio.sleep(wait_time)
+                    continue
+
+                if e.code == 429:
+                    logger.warning(f"Escalte from {gmodel} to the next model")
+                    break  # 次のモデルへエスカレーション
+
+                return AskGeminiErrorInfo(error_type=type(e).__name__, error=e.message)
+            except ValidationError as e:
+                # AIの回答がスキーマに合わなかった場合（ループ、欠落など）
+                finish_reasons = []
+                for candidate in response.candidates:
+                    finish_reason = candidate.finish_reason or "unknown"
+                    finish_reasons.append(finish_reason)
+
+                logger.error(
+                    f"Schema validation error for model {gmodel}",
+                    error_type=type(e).__name__,
+                    error=str(e),
+                    gemini_response=response.text,
+                    finish_reasons=", ".join(finish_reasons),
+                    candidates_token_count=response.usage_metadata.candidates_token_count,
+                )
+                return AskGeminiErrorInfo(
+                    error_type="SchemaValidationError", error=str(e)
+                )
+            except Exception as e:
+                return AskGeminiErrorInfo(error_type=type(e).__name__, error=str(e))
+
     return AskGeminiErrorInfo(
         error_type=NoModelsAvailableError.__name__,
         error="No models available or Escalation limit exceeded.",
@@ -179,6 +216,7 @@ async def generate_search_query(
         ),
         prompt_template,
     ]
+
     try:
         response = await _request_gemini(
             client, GeminiSearchURLAnalysisResponse, contents

@@ -33,8 +33,7 @@
   "search_input_box": "#example_selector",
   "search_button":".example_class",
   "search_options":{
-    "category":{"tag_type":"select", "query_name":"cate","options":[{"value":1, "text":"全商品"}, {"value":2, "text":"食品"}]},
-    "stock":{"tag_type":"a", "href":"/xxxx/?yyy=zzz","text":"在庫あり"}
+    "category":{"tag_type":"select", "query_name":"cate","options":[{"value":1, "text":"全商品"}, {"value":2, "text":"食品"}]}
   },
   "error_msg": "error values"
 }}
@@ -42,7 +41,7 @@
 
 - "search_input_box" : "あればCSSセレクタ、なければ空欄"
 - "search_button" : "あればCSSセレクタ、なければ空欄"
-- "search_options": "検索オプション。なければ空の{}。'tag_type' : 'タグの種類' , 'query_name' : 'フォーム上のGETメソッドの場合のURLで使用されるquery名', 'options':'選択肢のクエリで使用される値や表示されうrテキスト'"
+- "search_options": "検索オプション。なければoutputに含めなく良い。カテゴリのみ見つけて。"
 - "error_msg" : "search_input_box または search_buttonが見つからない場合の理由。 search_optionsが見つからない場合はなくて良い"
 
 # 留意
