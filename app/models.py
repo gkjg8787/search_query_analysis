@@ -47,7 +47,7 @@ class UserAgent(BaseModel):
     os_version: str = "10.0.0"
 
 
-class DownloadRequest(BaseModel):
+class SearchURLAnalysisRequest(BaseModel):
     url: str
     search_word: str | None = None
     analysis_scope: (
@@ -107,7 +107,7 @@ class SearchURLInfo(BaseModel):
     query_options: list[QueryOption] = Field(default_factory=list)
 
 
-class DownloadResponse(BaseModel):
+class SearchURLAnalysisResponse(BaseModel):
     url_info: SearchURLInfo | None = None
     error: ErrorDetail | None = None
 
@@ -121,7 +121,7 @@ class AskGeminiErrorInfo(BaseModel):
     error: str
 
 
-class SearchURLAnalysisResponse(BaseModel):
+class GeminiSearchURLAnalysisResponse(BaseModel):
     site_top_url: str = Field(default="", description="Top URL of the site")
     search_dir: str = Field(default="", description="Search directory path")
     search_fixed_query: str = Field(default="", description="Search fixed query")

@@ -10,7 +10,7 @@ from models import (
     GeminiSearchBoxResponse,
     NoModelsAvailableError,
     AskGeminiErrorInfo,
-    SearchURLAnalysisResponse,
+    GeminiSearchURLAnalysisResponse,
 )
 from common.read_config import get_ai_model_list
 
@@ -170,7 +170,7 @@ async def generate_search_query(
     after_search_url: str,
     searchword: str,
     search_options: dict | None = None,
-) -> SearchURLAnalysisResponse | AskGeminiErrorInfo:
+) -> GeminiSearchURLAnalysisResponse | AskGeminiErrorInfo:
     prompt_template = await get_prompt("search_query_prompt.txt")
     client = genai.Client()
     contents = [
@@ -180,7 +180,9 @@ async def generate_search_query(
         prompt_template,
     ]
     try:
-        response = await _request_gemini(client, SearchURLAnalysisResponse, contents)
+        response = await _request_gemini(
+            client, GeminiSearchURLAnalysisResponse, contents
+        )
         if isinstance(response, AskGeminiErrorInfo):
             return response
         return response

@@ -6,7 +6,7 @@ import uuid
 from fastapi import FastAPI, Request
 import structlog
 
-from models import DownloadRequest, DownloadResponse, ErrorDetail
+from models import SearchURLAnalysisRequest, SearchURLAnalysisResponse, ErrorDetail
 from downloader import get_search_query_result
 from common.logger_config import configure_logger
 
@@ -40,16 +40,16 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 
 
-@app.post("/searchurl/analysis/", response_model=DownloadResponse)
-async def generate_search_query(request: Request, dlreq: DownloadRequest):
+@app.post("/searchurl/analysis/", response_model=SearchURLAnalysisResponse)
+async def generate_search_query(request: Request, suareq: SearchURLAnalysisRequest):
     structlog.contextvars.clear_contextvars()
     structlog.contextvars.bind_contextvars(
         router_path=request.url.path,
         request_id=str(uuid.uuid4()),
     )
     log = structlog.get_logger(__name__)
-    log.info("Received request for search URL analysis", dlreq=dlreq)
-    success, result = await get_search_query_result(dlreq)
+    log.info("Received request for search URL analysis", suareq=suareq)
+    success, result = await get_search_query_result(suareq)
     log.info(
         "Completed request for search URL analysis",
         success=success,

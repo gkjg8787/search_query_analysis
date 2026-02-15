@@ -7,11 +7,11 @@ import nodriver as uc
 import structlog
 
 from models import (
-    DownloadRequest,
+    SearchURLAnalysisRequest,
     ErrorDetail,
     WaitCSSSelector,
     AskGeminiErrorInfo,
-    DownloadResponse,
+    SearchURLAnalysisResponse,
     GeminiSearchBoxResponse,
     SearchURLInfo,
 )
@@ -198,7 +198,7 @@ async def _get_page_with_ua(browser, useragent):
     return page
 
 
-async def dl_with_nodriver(req: DownloadRequest):
+async def dl_with_nodriver(req: SearchURLAnalysisRequest):
     logger.debug(f"input_params : {req.model_dump()}")
     browser = None
     page = None
@@ -269,7 +269,7 @@ async def dl_with_nodriver(req: DownloadRequest):
                 logger.exception("browser stop error")
 
 
-async def get_search_query_result(req: DownloadRequest):
+async def get_search_query_result(req: SearchURLAnalysisRequest):
     logger.debug(f"input_params : {req.model_dump()}")
     browser = None
     page = None
@@ -307,7 +307,7 @@ async def get_search_query_result(req: DownloadRequest):
         html_content = await page.get_content()
 
         if not html_content:
-            return False, DownloadResponse(
+            return False, SearchURLAnalysisResponse(
                 error=ErrorDetail(
                     error_type="NoContentError",
                     error_msg="Failed to retrieve HTML content from the page",
@@ -328,7 +328,7 @@ async def get_search_query_result(req: DownloadRequest):
             f"generate_searchbox_info_result : {generate_searchbox_info_result.model_dump()}"
         )
         if isinstance(generate_searchbox_info_result, AskGeminiErrorInfo):
-            return False, DownloadResponse(
+            return False, SearchURLAnalysisResponse(
                 error=ErrorDetail(
                     error_type=generate_searchbox_info_result.error_type,
                     error_msg=generate_searchbox_info_result.error,
@@ -340,7 +340,7 @@ async def get_search_query_result(req: DownloadRequest):
         ):
             return (
                 False,
-                DownloadResponse(
+                SearchURLAnalysisResponse(
                     error=ErrorDetail(
                         error_type="SearchBoxInfoError",
                         error_msg="Failed to extract search box information from the page",
@@ -356,7 +356,7 @@ async def get_search_query_result(req: DownloadRequest):
 
         except Exception:
             logger.exception("Failed to find or interact with search box")
-            return False, DownloadResponse(
+            return False, SearchURLAnalysisResponse(
                 error=ErrorDetail(
                     error_type="SearchBoxInteractionError",
                     error_msg="Failed to find or interact with search box",
@@ -376,7 +376,7 @@ async def get_search_query_result(req: DownloadRequest):
             await search_btn.mouse_click()
         except Exception:
             logger.exception("Failed to click search button")
-            return False, DownloadResponse(
+            return False, SearchURLAnalysisResponse(
                 error=ErrorDetail(
                     error_type="SearchButtonInteractionError",
                     error_msg="Failed to find or interact with search button",
@@ -413,7 +413,7 @@ async def get_search_query_result(req: DownloadRequest):
             | after_search_options,
         )
         if isinstance(search_query_res, AskGeminiErrorInfo):
-            return False, DownloadResponse(
+            return False, SearchURLAnalysisResponse(
                 error=ErrorDetail(
                     error_type=search_query_res.error_type,
                     error_msg=search_query_res.error,
@@ -424,14 +424,14 @@ async def get_search_query_result(req: DownloadRequest):
         if not search_query_res.search_url_type == "query":
             return (
                 False,
-                DownloadResponse(
+                SearchURLAnalysisResponse(
                     error=ErrorDetail(
                         error_type="SearchQueryAnalysisError",
                         error_msg=f"The search URL type is not 'query', cannot extract search query information , search_url_type: {search_query_res.search_url_type}",
                     )
                 ),
             )
-        result = DownloadResponse(
+        result = SearchURLAnalysisResponse(
             url_info=SearchURLInfo(
                 site_top_url=search_query_res.site_top_url,
                 search_dir=search_query_res.search_dir,
@@ -447,7 +447,7 @@ async def get_search_query_result(req: DownloadRequest):
 
     except Exception as e:
         logger.exception("other error")
-        return False, DownloadResponse(
+        return False, SearchURLAnalysisResponse(
             error=ErrorDetail(
                 error_type=type(e).__name__,
                 error_msg=str(e),
