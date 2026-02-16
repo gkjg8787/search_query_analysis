@@ -306,8 +306,15 @@ async def get_search_query_result(req: SearchURLAnalysisRequest):
                 await search_btn.mouse_click()
                 break
             except Exception as e:
-                logger.exception(f"Failed to click search button {btn_selector}: {e}")
+                logger.warning(
+                    f"Failed to click search button",
+                    btn_selector=btn_selector,
+                    error=str(e),
+                )
                 if btn_selector == generate_searchbox_info_result.search_buttons[-1]:
+                    logger.exception(
+                        f"Failed to find or interact with any of the search buttons: {generate_searchbox_info_result.search_buttons}"
+                    )
                     return False, SearchURLAnalysisResponse(
                         error=ErrorDetail(
                             error_type=f"SearchButtonInteractionError: {type(e).__name__}",
