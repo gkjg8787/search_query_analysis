@@ -107,8 +107,10 @@ class GeminiSearchBoxResponse(BaseModel):
     search_input_box: str = Field(
         default="", description="CSS selector for the search input box"
     )
-    search_button: str = Field(
-        default="", description="CSS selector for the search button"
+    search_buttons: list[str] = Field(
+        default_factory=list,
+        description="CSS selectors for the search buttons",
+        max_length=5,
     )
     search_options: SearchBoxFilterOptions | None = Field(
         default=None, description="Additional search options"

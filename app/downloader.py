@@ -336,7 +336,7 @@ async def get_search_query_result(req: SearchURLAnalysisRequest):
             )
         if (
             not generate_searchbox_info_result.search_input_box
-            or not generate_searchbox_info_result.search_button
+            or not generate_searchbox_info_result.search_buttons
         ):
             return (
                 False,
@@ -371,17 +371,21 @@ async def get_search_query_result(req: SearchURLAnalysisRequest):
         logger.debug(
             f"searchword: {search_keyword}, Active element info: {active_element_info}"
         )
-        try:
-            search_btn = await page.select(generate_searchbox_info_result.search_button)
-            await search_btn.mouse_click()
-        except Exception as e:
-            logger.exception(f"Failed to click search button: {e}")
-            return False, SearchURLAnalysisResponse(
-                error=ErrorDetail(
-                    error_type=f"SearchButtonInteractionError: {type(e).__name__}",
-                    error_msg=f"Failed to find or interact with search button: {e}",
-                )
-            )
+        for btn_selector in generate_searchbox_info_result.search_buttons:
+            try:
+                search_btn = await page.select(btn_selector)
+                await search_btn.mouse_click()
+                break
+            except Exception as e:
+                logger.exception(f"Failed to click search button {btn_selector}: {e}")
+                if btn_selector == generate_searchbox_info_result.search_buttons[-1]:
+                    return False, SearchURLAnalysisResponse(
+                        error=ErrorDetail(
+                            error_type=f"SearchButtonInteractionError: {type(e).__name__}",
+                            error_msg=f"Failed to find or interact with search button: {e}",
+                        )
+                    )
+                continue
 
         await asyncio.sleep(DEFAULT_WAIT_TIME["after_search"])
 

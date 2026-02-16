@@ -31,7 +31,7 @@
 ```
 {{
   "search_input_box": "#example_selector",
-  "search_button":".example_class",
+  "search_buttons":[".example_class", "#second_selector"],
   "search_options":{
     "category":{"tag_type":"select", "query_name":"cate","options":[{"value":1, "text":"全商品"}, {"value":2, "text":"食品"}]}
   },
@@ -40,7 +40,7 @@
 ```
 
 - "search_input_box" : "あればCSSセレクタ、なければ空欄"
-- "search_button" : "あればCSSセレクタ、なければ空欄"
+- "search_buttons" : "候補となるCSSセレクタをリストで列挙、なければ空のリスト。最有力順で出力される。"
 - "search_options": "検索オプション。なければoutputに含めなく良い。カテゴリのみ見つけて。"
 - "error_msg" : "search_input_box または search_buttonが見つからない場合の理由。 search_optionsが見つからない場合はなくて良い"
 
