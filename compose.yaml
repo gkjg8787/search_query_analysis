@@ -1,0 +1,9 @@
+services:
+  sqa:
+    build: ./
+    init: true
+    env_file:
+      - .env
+    ports:
+      - "8130:8130"
+    shm_size: "2gb"
