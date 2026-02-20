@@ -50,16 +50,6 @@ class UserAgent(BaseModel):
 class SearchURLAnalysisRequest(BaseModel):
     url: str
     search_word: str | None = None
-    analysis_scope: (
-        Literal[
-            "before_search",
-            "all",
-        ]
-        | None
-    ) = Field(
-        default=None,
-        description="Scope of analysis: 'all' or 'before_search' or None, defalt is None, None and before_search are one anaylsis",
-    )
     cookie: Optional[Cookie] = None
     wait_css_selector: Optional[WaitCSSSelector] = None
     page_wait_time: Optional[float] = None
@@ -112,26 +102,33 @@ class GeminiSearchBoxResponse(BaseModel):
         description="CSS selectors for the search buttons",
         max_length=5,
     )
-    search_options: SearchBoxFilterOptions | None = Field(
-        default=None, description="Additional search options"
-    )
     error_msg: str = Field(
         default="", description="Error message, if any", max_length=500
     )
 
 
-class SearchURLInfo(BaseModel):
-    site_top_url: str = ""
-    search_dir: str = ""
-    search_url_type: Literal["", "query", "directory"] = ""
-    search_fixed_query: str = ""
-    search_query: str | None = None
-    encoding: str = ""
-    query_options: list[QueryOption] = Field(default_factory=list)
+class ParameterDetail(BaseModel):
+    position: str  # "path" or "query"
+    key: str | None = None
+    index: int | None = None
+    consumed_segments: int = 1
+    delimiter: str | None = None
+    encoding: str = "utf-8"
+    value_type: str  # "keyword" or "category"
+    is_json: bool | None = None
+    json_key_path: str | None = None
+
+
+class URLAnalysisModel(BaseModel):
+    base_url: str
+    fixed_path: str
+    structure_type: str
+    url_template: str
+    parameters: dict[str, ParameterDetail]
 
 
 class SearchURLAnalysisResponse(BaseModel):
-    url_info: SearchURLInfo | None = None
+    url_info: URLAnalysisModel | None = None
     error: ErrorDetail | None = None
 
 

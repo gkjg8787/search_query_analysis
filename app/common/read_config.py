@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 import settings
@@ -5,6 +7,32 @@ import settings
 
 class LogOptions(BaseModel):
     directory_path: str
+
+
+class MatchRule(BaseModel):
+    match_type: Literal["exact", "contains"] = "exact"
+    match_threshold: int = 1
+    match_list: list[str] = Field(default_factory=list)
+
+
+class CorrectCategory(BaseModel):
+    match_threshold: int = 1
+    rules: list[MatchRule] = Field(default_factory=list)
+
+
+class ExtractCategoryOptions(BaseModel):
+    extract_type: Literal["rule", "ai"] = Field(
+        default="rule",
+        description="Method to extract categories: 'rule' or 'ai'",
+    )
+    correct_category: CorrectCategory | None = Field(
+        default=None,
+        description="Settings for correct category extraction (required if extract_type is 'rule')",
+    )
+    incorrect_category: CorrectCategory | None = Field(
+        default_factory=None,
+        description="Settings for incorrect category extraction",
+    )
 
 
 def to_lower_keys(obj):
@@ -30,3 +58,8 @@ def get_log_options():
 
 def get_ai_model_list():
     return settings.AI_MODEL_LIST
+
+
+def get_extract_category_options():
+    lower_key_dict = to_lower_keys(settings.EXTRACT_CATEGORY)
+    return ExtractCategoryOptions(**lower_key_dict)

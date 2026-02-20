@@ -3,6 +3,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 import re
 
+
 import nodriver as uc
 import structlog
 
@@ -12,11 +13,11 @@ from models import (
     WaitCSSSelector,
     AskGeminiErrorInfo,
     SearchURLAnalysisResponse,
-    GeminiSearchBoxResponse,
-    SearchURLInfo,
+    URLAnalysisModel,
 )
 from req_gemini import generate_searchbox_info, generate_search_query
-
+from category import check_category
+from url_analysis import URLPatternLogic
 
 COOKIE_PATH = Path("/app/cookie/")
 DEFAULT_WAIT_TIME = {
@@ -253,8 +254,12 @@ async def get_search_query_result(req: SearchURLAnalysisRequest):
                 logger.exception(f"Error saving cookies to file: {e}")
 
         generate_searchbox_info_result = await generate_searchbox_info(html_content)
+        category_ok, category_data = await check_category(html_content)
         logger.info(
-            f"generate_searchbox_info_result : {generate_searchbox_info_result.model_dump()}"
+            f"Information extraction from HTML completed",
+            category_return=category_ok,
+            category_data=category_data,
+            generate_searchbox_info_result=generate_searchbox_info_result.model_dump(),
         )
         if isinstance(generate_searchbox_info_result, AskGeminiErrorInfo):
             return False, SearchURLAnalysisResponse(
@@ -300,6 +305,62 @@ async def get_search_query_result(req: SearchURLAnalysisRequest):
         logger.debug(
             f"searchword: {search_keyword}, Active element info: {active_element_info}"
         )
+
+        # category のセレクトボックスがあれば選択してみる
+        selected_category = {"value": None, "text": None}
+        if category_ok and category_data:
+            logger.info(
+                f"Category data found, trying to interact with category selection",
+                category_data=category_data.model_dump(),
+            )
+            selected_index = 0  # TODO: 現状はマッチした最初のカテゴリーを選択する実装だが、将来的には複数マッチした場合の選択方法も検討する必要がある
+            selected_category["value"] = category_data.options[selected_index].value
+            selected_category["text"] = category_data.options[selected_index].text
+            if category_data.id or category_data.name:
+                if category_data.id:
+                    selector = f"select#{category_data.id}"
+                elif category_data.name:
+                    selector = f"select[name='{category_data.name}']"
+                selector += f" option[value='{selected_category['value']}']"
+                try:
+                    select_elem = await page.select(selector)
+                    await select_elem.select_option()
+                    logger.info(
+                        f"Interacted with category select element successfully",
+                        selector=selector,
+                        selected_category=selected_category,
+                    )
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to interact with category select element: {e}",
+                        selector=selector,
+                    )
+            elif category_data.class_list:
+                for class_name in category_data.class_list:
+                    selector = f"select.{class_name}"
+                    selector += f" option[value='{selected_category['value']}']"
+                    try:
+                        select_elem = await page.select(selector)
+                        await select_elem.select_option()
+                        logger.info(
+                            f"Interacted with category select element successfully",
+                            selector=selector,
+                            selected_category=selected_category,
+                        )
+                        break
+                    except Exception as e:
+                        logger.warning(
+                            f"Failed to interact with category select element: {e}",
+                            selector=selector,
+                        )
+                        continue
+            else:
+                logger.warning(
+                    f"Unsupported category tag type for interaction",
+                    selected_category=selected_category,
+                )
+                # ここではセレクトボックス以外のパターンは未対応とする
+
         for btn_selector in generate_searchbox_info_result.search_buttons:
             try:
                 search_btn = await page.select(btn_selector)
@@ -327,93 +388,15 @@ async def get_search_query_result(req: SearchURLAnalysisRequest):
 
         search_content = await page.get_content()
 
-        input_search_options = (
-            generate_searchbox_info_result.search_options.model_dump()
-            if generate_searchbox_info_result.search_options
-            else None
-        )
-        if req.analysis_scope == "all":
-            after_generate_searchbox_info_result = await generate_searchbox_info(
-                search_content
-            )
-            logger.debug(
-                f"after_generate_searchbox_info_result : {after_generate_searchbox_info_result.model_dump()}"
-            )
-            if (
-                isinstance(
-                    after_generate_searchbox_info_result, GeminiSearchBoxResponse
-                )
-                and after_generate_searchbox_info_result.search_options
-            ):
-                if input_search_options:
-                    # 入力前の検索オプションと、検索後の検索オプションをマージして、検索クエリ生成に渡す
-                    if (
-                        input_search_options["category"]
-                        and after_generate_searchbox_info_result.search_options.category
-                        and input_search_options["category"]["tag_type"]
-                        == after_generate_searchbox_info_result.search_options.category.tag_type
-                        and input_search_options["category"]["query_name"]
-                        == after_generate_searchbox_info_result.search_options.category.query_name
-                    ):
-                        # カテゴリーが両方にある場合は、検索後のカテゴリー情報を優先する
-                        input_search_options["category"] = (
-                            after_generate_searchbox_info_result.search_options.category.model_dump()
-                        )
-                        logger.info(
-                            "Search options category matched between before and after search, using after search options",
-                            category=input_search_options["category"],
-                        )
-                    else:
-                        logger.warning(
-                            "Search options category mismatch between before and after search, using before search options",
-                            before_category=input_search_options.get("category"),
-                            after_category=after_generate_searchbox_info_result.search_options.category.model_dump(),
-                        )
-                else:
-                    input_search_options = (
-                        after_generate_searchbox_info_result.search_options.model_dump()
-                    )
-                    logger.info(
-                        "Search options category matched between before and after search, using after search options",
-                        category=input_search_options["category"],
-                    )
-
         after_search_url = page.url
-        search_query_res = await generate_search_query(
-            before_search_url=top_page_url,
-            after_search_url=after_search_url,
-            searchword=search_keyword,
-            search_options=input_search_options,
-        )
-        if isinstance(search_query_res, AskGeminiErrorInfo):
-            return False, SearchURLAnalysisResponse(
-                error=ErrorDetail(
-                    error_type=search_query_res.error_type,
-                    error_msg=search_query_res.error,
-                )
-            )
+        url_analysis = URLPatternLogic(
+            target_url=after_search_url, keyword=search_keyword, category_val=""
+        ).analyze()
 
-        logger.debug(f"search_query_res : {search_query_res.model_dump()}")
-        if not search_query_res.search_url_type == "query":
-            return (
-                False,
-                SearchURLAnalysisResponse(
-                    error=ErrorDetail(
-                        error_type="SearchQueryAnalysisError",
-                        error_msg=f"The search URL type is not 'query', cannot extract search query information , search_url_type: {search_query_res.search_url_type}",
-                    )
-                ),
-            )
+        logger.debug(f"url_analysis : {url_analysis.model_dump()}")
+
         result = SearchURLAnalysisResponse(
-            url_info=SearchURLInfo(
-                site_top_url=search_query_res.site_top_url,
-                search_dir=search_query_res.search_dir,
-                search_url_type=search_query_res.search_url_type,
-                search_query=search_query_res.query_param,
-                search_fixed_query=search_query_res.search_fixed_query,
-                query_options=search_query_res.query_options,
-                encoding=search_query_res.encoding,
-            ),
+            url_info=url_analysis,
         )
 
         return True, result
