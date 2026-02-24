@@ -51,6 +51,10 @@ def to_lower_keys(obj):
         return obj
 
 
+def get_base_dir():
+    return settings.BASE_DIR
+
+
 def get_log_options():
     lower_key_dict = to_lower_keys(settings.LOG_OPTIONS)
     return LogOptions(**lower_key_dict)

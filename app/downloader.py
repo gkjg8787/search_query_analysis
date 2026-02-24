@@ -13,11 +13,13 @@ from models import (
     WaitCSSSelector,
     AskGeminiErrorInfo,
     SearchURLAnalysisResponse,
-    URLAnalysisModel,
+    SearchBoxInfo,
 )
-from req_gemini import generate_searchbox_info, generate_search_query
+from req_gemini import generate_searchbox_info
 from category import check_category
 from url_analysis import URLPatternLogic
+from parser import extract_search_elements
+from common.read_config import get_base_dir
 
 COOKIE_PATH = Path("/app/cookie/")
 DEFAULT_WAIT_TIME = {
@@ -26,6 +28,7 @@ DEFAULT_WAIT_TIME = {
 }
 
 logger = structlog.get_logger(__name__)
+chrome_version_fpath = get_base_dir() / "temp" / "chrome_version.txt"
 
 
 async def _cookie_to_param(
@@ -129,6 +132,41 @@ async def _wait_css_selector(page, selector: WaitCSSSelector):
                 raise e
 
 
+async def get_browser_version():
+    if chrome_version_fpath.exists():
+        try:
+            version = chrome_version_fpath.read_text().strip()
+            logger.info(f"Read Chrome version from file: {version}")
+            return version
+        except Exception as e:
+            logger.exception(f"Error reading Chrome version from file: {e}")
+
+    try:
+        browser = await uc.start()
+        page = await browser.get("about:blank")
+        # JavaScriptを実行してUser Agentを取得
+        user_agent = await page.evaluate("navigator.userAgent")
+
+        # 正規表現でChromeのバージョン部分を抽出
+        match = re.search(r"Chrome/(\d+\.\d+\.\d+\.\d+)", user_agent)
+        try:
+            v = int(match.group(1))
+            chrome_version_fpath.write_text(str(v))
+            logger.info(f"Detected Chrome version: {v}")
+            return v
+        except ValueError:
+            logger.exception(
+                f"Failed to parse Chrome version from user agent: {match.group(1)}"
+            )
+            return None
+    except Exception as e:
+        logger.exception(f"Error detecting Chrome version: {e}")
+        return None
+    finally:
+        browser.stop()
+        await asyncio.sleep(1)
+
+
 async def get_domain_from_url(url: str) -> str:
     parsed_url = urlparse(url)
     return parsed_url.netloc
@@ -147,15 +185,23 @@ async def format_version_regex(version):
 
 
 async def _get_browser_with_ua(useragent):
+    browser_args = [
+        "--window-size=1920,1080",
+        "--start-maximized",
+    ]
     if not useragent:
-        return await uc.start()
+        return await uc.start(browser_args=browser_args)
+    chrome_major_version = await get_browser_version()
+    if not chrome_major_version:
+        chrome_major_version = useragent.major
     ua_os_version = await format_version_regex(useragent.os_version)
     ua_template = (
         f"Mozilla/5.0 (Windows NT {ua_os_version}; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
-        f"Chrome/{useragent.major}.0.0.0 Safari/537.36"
+        f"Chrome/{chrome_major_version}.0.0.0 Safari/537.36"
     )
-    return await uc.start(browser_args=[f"--user-agent={ua_template}"])
+    browser_args.append(f"--user-agent={ua_template}")
+    return await uc.start(browser_args=browser_args)
 
 
 async def _get_page_with_ua(browser, useragent):
@@ -188,9 +234,13 @@ async def _get_page_with_ua(browser, useragent):
             },
         }
 
+    chrome_major_version = await get_browser_version()
+    if not chrome_major_version:
+        chrome_major_version = useragent.major
+
     await page.send(
         set_ua_cdp_generator(
-            major=useragent.major,
+            major=chrome_major_version,
             platform=useragent.platform,
             os_version=useragent.os_version,
             ua_os_version=await format_version_regex(useragent.os_version),
@@ -253,25 +303,33 @@ async def get_search_query_result(req: SearchURLAnalysisRequest):
             except Exception as e:
                 logger.exception(f"Error saving cookies to file: {e}")
 
-        generate_searchbox_info_result = await generate_searchbox_info(html_content)
+        # AI
+        # ret = await generate_searchbox_info(html_content)
+        # searchboxinfo = SearchBoxInfo(
+        #     search_input_list=[ret.search_input_box],
+        #     search_button_list=ret.search_buttons,
+        # )
+        # if isinstance(searchboxinfo, AskGeminiErrorInfo):
+        #    return False, SearchURLAnalysisResponse(
+        #        error=ErrorDetail(
+        #            error_type=searchboxinfo.error_type,
+        #            error_msg=searchboxinfo.error,
+        #          )
+        #   )
+        ret = await extract_search_elements(html_content)
+        searchboxinfo = SearchBoxInfo(
+            search_input_list=ret["search_input_list"],
+            search_button_list=ret["search_button_list"],
+        )
         category_ok, category_data = await check_category(html_content)
         logger.info(
             f"Information extraction from HTML completed",
             category_return=category_ok,
             category_data=category_data,
-            generate_searchbox_info_result=generate_searchbox_info_result.model_dump(),
+            generate_searchbox_info_result=searchboxinfo.model_dump(),
         )
-        if isinstance(generate_searchbox_info_result, AskGeminiErrorInfo):
-            return False, SearchURLAnalysisResponse(
-                error=ErrorDetail(
-                    error_type=generate_searchbox_info_result.error_type,
-                    error_msg=generate_searchbox_info_result.error,
-                )
-            )
-        if (
-            not generate_searchbox_info_result.search_input_box
-            or not generate_searchbox_info_result.search_buttons
-        ):
+
+        if not searchboxinfo.search_input_list or not searchboxinfo.search_button_list:
             return (
                 False,
                 SearchURLAnalysisResponse(
@@ -283,19 +341,23 @@ async def get_search_query_result(req: SearchURLAnalysisRequest):
             )
 
         # start search and get url
-        try:
-            searchbox = await page.select(
-                generate_searchbox_info_result.search_input_box
-            )
 
-        except Exception as e:
-            logger.exception(f"Failed to find or interact with search box: {e}")
-            return False, SearchURLAnalysisResponse(
-                error=ErrorDetail(
-                    error_type=f"SearchBoxInteractionError: {type(e).__name__}",
-                    error_msg=f"Failed to find or interact with search box: {e}",
+        for selector in searchboxinfo.search_input_list:
+            try:
+                searchbox = await page.select(selector)
+                break
+            except Exception as e:
+                logger.warning(
+                    f"Failed to find search box with selector '{selector}': {e}"
                 )
-            )
+
+            if selector == searchboxinfo.search_input_list[-1]:
+                return False, SearchURLAnalysisResponse(
+                    error=ErrorDetail(
+                        error_type=f"SearchBoxInteractionError: {type(e).__name__}",
+                        error_msg=f"Failed to find or interact with search box: {e}",
+                    )
+                )
 
         search_keyword = req.search_word or "ポケモン"
         await searchbox.send_keys(search_keyword)
@@ -307,15 +369,18 @@ async def get_search_query_result(req: SearchURLAnalysisRequest):
         )
 
         # category のセレクトボックスがあれば選択してみる
+        # selectタグのみ対応
         selected_category = {"value": None, "text": None}
-        if category_ok and category_data:
+        if category_ok and category_data and category_data.options:
             logger.info(
                 f"Category data found, trying to interact with category selection",
                 category_data=category_data.model_dump(),
             )
-            selected_index = 0  # TODO: 現状はマッチした最初のカテゴリーを選択する実装だが、将来的には複数マッチした場合の選択方法も検討する必要がある
+            selected_index = 1
+
             selected_category["value"] = category_data.options[selected_index].value
             selected_category["text"] = category_data.options[selected_index].text
+
             if category_data.id or category_data.name:
                 if category_data.id:
                     selector = f"select#{category_data.id}"
@@ -355,16 +420,29 @@ async def get_search_query_result(req: SearchURLAnalysisRequest):
                         )
                         continue
             else:
-                logger.warning(
-                    f"Unsupported category tag type for interaction",
-                    selected_category=selected_category,
-                )
-                # ここではセレクトボックス以外のパターンは未対応とする
+                try:
+                    select_elem = await page.select(
+                        f"select option[value='{selected_category['value']}']"
+                    )
+                    await select_elem.select_option()
+                    logger.info(
+                        f"Interacted with category select element successfully",
+                        selector=selector,
+                        selected_category=selected_category,
+                    )
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to interact with category select element: {e}",
+                        selector=selector,
+                    )
 
-        for btn_selector in generate_searchbox_info_result.search_buttons:
+        for btn_selector in searchboxinfo.search_button_list:
             try:
                 search_btn = await page.select(btn_selector)
                 await search_btn.mouse_click()
+                logger.info(
+                    f"Clicked search button successfully", btn_selector=btn_selector
+                )
                 break
             except Exception as e:
                 logger.warning(
@@ -372,9 +450,9 @@ async def get_search_query_result(req: SearchURLAnalysisRequest):
                     btn_selector=btn_selector,
                     error=str(e),
                 )
-                if btn_selector == generate_searchbox_info_result.search_buttons[-1]:
+                if btn_selector == searchboxinfo.search_button_list[-1]:
                     logger.exception(
-                        f"Failed to find or interact with any of the search buttons: {generate_searchbox_info_result.search_buttons}"
+                        f"Failed to find or interact with any of the search buttons: {searchboxinfo.search_buttons}"
                     )
                     return False, SearchURLAnalysisResponse(
                         error=ErrorDetail(
@@ -389,8 +467,14 @@ async def get_search_query_result(req: SearchURLAnalysisRequest):
         search_content = await page.get_content()
 
         after_search_url = page.url
+        if selected_category["value"]:
+            category_val = selected_category["value"]
+        else:
+            category_val = ""
         url_analysis = URLPatternLogic(
-            target_url=after_search_url, keyword=search_keyword, category_val=""
+            target_url=after_search_url,
+            keyword=search_keyword,
+            category_val=category_val,
         ).analyze()
 
         logger.debug(f"url_analysis : {url_analysis.model_dump()}")
@@ -398,6 +482,8 @@ async def get_search_query_result(req: SearchURLAnalysisRequest):
         result = SearchURLAnalysisResponse(
             url_info=url_analysis,
         )
+        if category_ok and category_data:
+            result.categories = category_data
 
         return True, result
 

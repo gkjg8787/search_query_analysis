@@ -56,41 +56,32 @@ class SearchURLAnalysisRequest(BaseModel):
     useragent: UserAgent | None = UserAgent()
 
 
-class QueryOptionValue(BaseModel):
-    value: str = Field(description="Value of the query parameter", max_length=50)
-    text: Optional[str] = Field(
-        default=None, description="Description of the query value", max_length=100
-    )
-
-
-class QueryOption(BaseModel):
-    key: str = Field(description="Query parameter key")
-    values: list[QueryOptionValue] = Field(
+class SearchBoxInfo(BaseModel):
+    search_input_list: list[str] = Field(
         default_factory=list,
-        description="List of possible values for the query parameter",
+        description="List of CSS selectors for search input boxes",
+        max_items=5,
     )
-    description: Optional[str] = Field(
-        default=None, description="Description of the query option", max_length=100
-    )
-
-
-class SearchCategoryOption(BaseModel):
-    tag_type: str = Field(description="Type of the tag (e.g., 'select', 'input')")
-    query_name: Optional[str] = Field(
-        default=None,
-        description="Name of the query parameter associated with this category",
-    )
-    options: list[QueryOptionValue] = Field(
+    search_button_list: list[str] = Field(
         default_factory=list,
-        description="List of possible values for this category",
+        description="List of CSS selectors for search buttons",
+        max_items=5,
     )
 
 
-class SearchBoxFilterOptions(BaseModel):
-    category: Optional[SearchCategoryOption] = Field(
-        default=None,
-        description="Category of the search box (e.g., 'e-commerce', 'news', 'general')",
+class OptionData(BaseModel):
+    value: Optional[str] = Field(
+        description="Value attribute of the option", max_length=200
     )
+    text: str = Field(description="Text content of the option", max_length=200)
+
+
+class SelectData(BaseModel):
+    id: Optional[str]
+    name: Optional[str]
+    class_list: list[str]
+    options: list[OptionData]
+    displayed: bool = True
 
 
 class GeminiSearchBoxResponse(BaseModel):
@@ -129,6 +120,7 @@ class URLAnalysisModel(BaseModel):
 
 class SearchURLAnalysisResponse(BaseModel):
     url_info: URLAnalysisModel | None = None
+    categories: SelectData | None = None
     error: ErrorDetail | None = None
 
 
@@ -139,6 +131,24 @@ class NoModelsAvailableError(Exception):
 class AskGeminiErrorInfo(BaseModel):
     error_type: str
     error: str
+
+
+class QueryOptionValue(BaseModel):
+    value: str = Field(description="Value of the query parameter", max_length=50)
+    text: Optional[str] = Field(
+        default=None, description="Description of the query value", max_length=100
+    )
+
+
+class QueryOption(BaseModel):
+    key: str = Field(description="Query parameter key")
+    values: list[QueryOptionValue] = Field(
+        default_factory=list,
+        description="List of possible values for the query parameter",
+    )
+    description: Optional[str] = Field(
+        default=None, description="Description of the query option", max_length=100
+    )
 
 
 class GeminiSearchURLAnalysisResponse(BaseModel):
@@ -163,3 +173,19 @@ class GeminiSearchURLAnalysisResponse(BaseModel):
     query_options: list[QueryOption] = Field(
         default_factory=list, description="Query options extracted from the URL"
     )
+
+
+class GenerateSearchURLRequest(BaseModel):
+    url_info: URLAnalysisModel
+    search_keyword: str
+    category_value: Optional[str] = None
+    category_name: Optional[str] = None
+
+
+class GenerateSearchURLResponse(BaseModel):
+    url: str = Field(
+        default="",
+        description="Generated search URL based on the input parameters",
+        max_length=500,
+    )
+    error: ErrorDetail | None = None
