@@ -236,6 +236,15 @@ class URLPatternLogic:
         kw = self._find_keyword()
         if kw:
             params["keyword"] = kw
+            # キーワード検出で判明したエンコーディングを使ってクエリパラメータを再パースする
+            # これにより、キーワード以外のパラメータ(submitボタンの値など)の文字化けを防ぐ
+            if kw.encoding and kw.encoding != "utf-8":
+                try:
+                    self.query_dict = urllib.parse.parse_qs(
+                        self.parsed.query, encoding=kw.encoding
+                    )
+                except Exception:
+                    pass
 
         ct = self._find_category()
         if ct:
