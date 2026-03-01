@@ -60,12 +60,12 @@ class SearchBoxInfo(BaseModel):
     search_input_list: list[str] = Field(
         default_factory=list,
         description="List of CSS selectors for search input boxes",
-        max_items=5,
+        max_length=5,
     )
     search_button_list: list[str] = Field(
         default_factory=list,
         description="List of CSS selectors for search buttons",
-        max_items=5,
+        max_length=5,
     )
 
 

@@ -142,6 +142,49 @@ def test_url_analysis():
             },
         ],
     }
+    yodobashi_ptn = {
+        "target": "https://www.yodobashi.com/category/141001/?word=%E3%81%BD%E3%81%91%E3%82%82%E3%82%93",
+        "keyword": "ぽけもん",
+        "category_value": "category/141001/",
+    }
+    yodobashi_correct = {
+        "analysis": {
+            "base_url": "https://www.yodobashi.com",
+            "fixed_path": "//",
+            "structure_type": "mixed",
+            "url_template": "https://www.yodobashi.com/{category}/?word={keyword}",
+            "parameters": {
+                "keyword": {
+                    "position": "query",
+                    "key": "word",
+                    "consumed_segments": 1,
+                    "encoding": "utf-8",
+                    "value_type": "keyword",
+                },
+                "category": {
+                    "position": "path",
+                    "index": 0,
+                    "consumed_segments": 2,
+                    "delimiter": "/",
+                    "encoding": "utf-8",
+                    "value_type": "category",
+                },
+            },
+        },
+        "generate": [
+            {
+                "url": "https://www.yodobashi.com/category/21484/?word=%E5%8D%98%E4%B8%89%E9%9B%BB%E6%B1%A0",
+                "keyword": "単三電池",
+                "category_value": "category/21484/",
+            },
+            {
+                "url": "https://www.yodobashi.com/?word=%E3%83%9D%E3%82%AB%E3%83%AA",
+                "keyword": "ポカリ",
+                "category_value": "",
+            },
+        ],
+    }
+
     # 入力ヒント: 検索語="スマイル40", カテゴリID="001170"
 
     bic_analysis = analysis_and_print(bic_ptn)
@@ -149,6 +192,8 @@ def test_url_analysis():
     rakuten_analysis = analysis_and_print(rakuten_ptn)
     print("--------------------------")
     matsu_analysis = analysis_and_print(matsukiyo_ptn)
+    print("--------------------------")
+    yodobashi_analysis = analysis_and_print(yodobashi_ptn)
 
     def _build_url_and_assert(analysis, correct):
         for gen in correct["generate"]:
@@ -165,3 +210,4 @@ def test_url_analysis():
     _build_url_and_assert(bic_analysis, bic_correct)
     _build_url_and_assert(rakuten_analysis, rakuten_correct)
     _build_url_and_assert(matsu_analysis, matsukiyo_correct)
+    _build_url_and_assert(yodobashi_analysis, yodobashi_correct)

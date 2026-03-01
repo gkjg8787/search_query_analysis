@@ -35,14 +35,19 @@ def build_url(
                 )
             processed_ct = urllib.parse.quote(processed_ct)
         elif ct_config.position == "path" and ct_config.consumed_segments > 1:
-            seg_len = len(category) // ct_config.consumed_segments
-            if seg_len > 0:
-                parts = [
-                    category[i : i + seg_len] for i in range(0, len(category), seg_len)
-                ]
-                processed_ct = (ct_config.delimiter or "/").join(parts)
-            else:
+            delimiter = ct_config.delimiter or "/"
+            if delimiter in category:
                 processed_ct = category
+            else:
+                seg_len = len(category) // ct_config.consumed_segments
+                if seg_len > 0:
+                    parts = [
+                        category[i : i + seg_len]
+                        for i in range(0, len(category), seg_len)
+                    ]
+                    processed_ct = delimiter.join(parts)
+                else:
+                    processed_ct = category
         else:
             processed_ct = category
 
@@ -181,10 +186,18 @@ class URLPatternLogic:
     def _find_category(self) -> Optional[ParameterDetail]:
         """パスまたはクエリからカテゴリIDを逆引き"""
         # 1. パス内の結合チェック (BicCamera型: 001/170 -> 001170)
+        # 1. パス内のチェック (スラッシュ区切り対応)
+        # 比較用に category_val の前後スラッシュを除去
+        target_cat = self.category_val.strip("/")
+
         for start in range(len(self.segments)):
             for end in range(start + 1, len(self.segments) + 1):
-                combined = "".join(self.segments[start:end])
-                if combined == self.category_val:
+                # セグメントをスラッシュで結合して比較
+                combined_with_slash = "/".join(self.segments[start:end])
+                # セグメントを単純結合して比較 (BicCamera型用)
+                combined_plain = "".join(self.segments[start:end])
+
+                if combined_with_slash == target_cat or combined_plain == target_cat:
                     return ParameterDetail(
                         position="path",
                         index=start,
@@ -196,7 +209,8 @@ class URLPatternLogic:
         # 2. クエリ内のチェック
         for key, values in self.query_dict.items():
             for value in values:
-                if self.category_val == value:
+                # クエリ内でも念のため strip して比較
+                if target_cat == value.strip("/"):
                     return ParameterDetail(
                         position="query", key=key, value_type="category"
                     )
