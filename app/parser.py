@@ -1,10 +1,11 @@
-from typing import Optional
+from typing import Optional, Literal
 import re
 
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
 from pydantic import BaseModel
 
-from models import SelectData, OptionData
+from models import SelectData, OptionData, CustomSelectData
+from common.read_config import MatchRule, get_extract_category_options
 
 
 def _is_display_none(elem):
@@ -20,6 +21,96 @@ def _is_display_none(elem):
     pattern = r"display\s*:\s*none(?=\s*;|$)"
 
     return bool(re.search(pattern, style, re.IGNORECASE))
+
+
+def _analyze_visibility(elem):
+    """
+    静的な情報から、その要素が「現在隠されているか」
+    および「動的に表示されるものか」を判定する
+    """
+    findings = {"is_hidden": False, "is_dynamic": False, "reason": ""}
+
+    curr = elem
+    while curr and curr.name not in [None, "html", "body"]:
+        style = curr.get("style", "").lower()
+        classes = " ".join(curr.get("class", [])).lower()
+
+        # 1. display:none の直接検知
+        if "display:none" in style.replace(" ", ""):
+            findings["is_hidden"] = True
+            findings["is_dynamic"] = True  # style属性で制御されている＝動的な可能性大
+            findings["reason"] = f"style in <{curr.name}>"
+            return findings
+
+        # 2. aria属性による開閉状態の検知
+        if curr.get("aria-expanded") == "false" or curr.get("aria-hidden") == "true":
+            findings["is_hidden"] = True
+            findings["is_dynamic"] = True
+            findings["reason"] = "aria-attributes"
+            return findings
+
+        # 3. クラス名による推測 (よくある動的UIのクラス)
+        if any(word in classes for word in ["modal", "dropdown", "popup", "hidden"]):
+            findings["is_dynamic"] = True
+
+        curr = curr.parent
+
+    return findings
+
+
+def _is_visible(element):
+    """
+    要素単体が非表示設定になっているか判定する
+    """
+    if not isinstance(element, Tag):
+        return True
+
+    # 1. style属性のチェック
+    style = element.get("style", "").lower()
+    if "display:none" in style.replace(" ", "") or "visibility:hidden" in style.replace(
+        " ", ""
+    ):
+        return False
+
+    # 2. HTML5 hidden属性
+    if element.has_attr("hidden"):
+        return False
+
+    # 3. ARIA属性 (非表示・折りたたみ)
+    if element.get("aria-hidden") == "true":
+        return False
+    if element.get("aria-expanded") == "false":
+        return False
+
+    return True
+
+
+def find_first_visible_ancestor(element):
+    """
+    要素から親へ遡り、自身も含めて「完全に表示されている」最初のタグを返す
+    """
+    curr = element
+
+    while curr and curr.name != "[document]":
+        # 現在の要素からルートまで遡り、途中に非表示要素がないか確認
+        is_effectively_visible = True
+        temp_curr = curr
+
+        # 先祖をすべてチェックして、一つでも非表示があればその要素は「非表示」とみなす
+        while temp_curr and temp_curr.name != "[document]":
+            if not _is_visible(temp_curr):
+                is_effectively_visible = False
+                break
+            temp_curr = temp_curr.parent
+
+        # もしこの要素（とその先祖）がすべて表示なら、これを返す
+        if is_effectively_visible:
+            return curr
+
+        # そうでなければ一つ上の親へ移動して再試行
+        curr = curr.parent
+
+    return None
 
 
 def extract_select_options(html_content: str) -> list[SelectData]:
@@ -40,38 +131,11 @@ def extract_select_options(html_content: str) -> list[SelectData]:
             name=select.get("name"),
             class_list=select.get("class", []),  # bs4のclassはデフォルトでリスト形式
             options=options,
-            displayed=not select.has_attr("hidden") and not _is_display_none(select),
+            visible=not select.has_attr("hidden") and not _is_display_none(select),
         )
         results.append(select_info)
 
     return results
-
-
-def _generate_css_selector(tag) -> Optional[str]:
-    if tag.get("id"):
-        return f"#{tag['id']}"
-    if tag.get("name"):
-        return f"{tag.name}[name='{tag['name']}']"
-
-    cls = tag.get("class")
-    if cls:
-        if isinstance(cls, list):
-            valid_cls = [c for c in cls if c.strip()]
-            if valid_cls:
-                return f"{tag.name}.{'.'.join(valid_cls)}"
-        elif cls.strip():
-            return f"{tag.name}.{cls}"
-
-    for attr in ["placeholder", "aria-label", "role", "type", "title", "value", "alt"]:
-        if tag.get(attr):
-            return f"{tag.name}[{attr}='{tag[attr]}']"
-
-    if tag.name == "a" and tag.get("href"):
-        href = tag.get("href").strip()
-        if href and not href.startswith("javascript:") and href != "#":
-            return f"{tag.name}[href='{href}']"
-
-    return None
 
 
 async def extract_search_elements(html_content: str) -> dict[str, list[str]]:
@@ -125,7 +189,7 @@ async def extract_search_elements(html_content: str) -> dict[str, list[str]]:
     input_candidates.sort(key=lambda x: x[0], reverse=True)
     search_input_set = set()
     for _, tag in input_candidates:
-        sel = _generate_css_selector(tag)
+        sel = _generate_css_selector(tag, soup)
         if sel:
             search_input_set.add(sel)
             if len(search_input_set) >= 3:
@@ -189,7 +253,7 @@ async def extract_search_elements(html_content: str) -> dict[str, list[str]]:
     button_candidates.sort(key=lambda x: x[0], reverse=True)
     search_button_set = set()
     for _, tag in button_candidates:
-        sel = _generate_css_selector(tag)
+        sel = _generate_css_selector(tag, soup)
         if sel:
             search_button_set.add(sel)
             if len(search_button_set) >= 3:
@@ -199,3 +263,202 @@ async def extract_search_elements(html_content: str) -> dict[str, list[str]]:
         "search_input_list": list(search_input_set),
         "search_button_list": list(search_button_set),
     }
+
+
+class CategoryNameOption(BaseModel):
+    name: str
+    match_type: Literal["exact", "contains"] = "exact"
+
+
+class CorrectCategories(BaseModel):
+    category_list: list[CategoryNameOption]
+    required_match_threshold: int
+
+    def __init__(self, rule: MatchRule):
+        super().__init__(
+            category_list=[
+                CategoryNameOption(name=name, match_type=rule.match_type)
+                for name in rule.match_list
+            ],
+            required_match_threshold=rule.match_threshold,
+        )
+
+    def execute(self, select_data: SelectData):
+        corrects = []
+        for category in self.category_list:
+            for option in select_data.options:
+                if category.match_type == "exact":
+                    if option.text.strip() == category.name.strip():
+                        corrects.append(category)
+
+                elif category.match_type == "contains":
+                    if category.name.strip() in option.text.strip():
+                        corrects.append(category)
+
+                if len(corrects) >= self.required_match_threshold:
+                    return True
+        return False
+
+
+async def _check_category_by_rules(select_data, rules: list[MatchRule]):
+    for rule in rules:
+        correct_category_checker = CorrectCategories(rule)
+        if not correct_category_checker.execute(select_data):
+            return False
+    return True
+
+
+async def check_category(html: str):
+    select_data_list = extract_select_options(html)
+    extract_category_options = get_extract_category_options()
+    if extract_category_options.extract_type == "rule":
+        correct_category_rule = extract_category_options.correct_category
+        incorrect_category_rule = extract_category_options.incorrect_category
+        for select_data in select_data_list:
+            if correct_category_rule is not None:
+                if await _check_category_by_rules(
+                    select_data, correct_category_rule.rules
+                ):
+                    if incorrect_category_rule is None:
+                        return True, select_data
+                    else:
+                        if not await _check_category_by_rules(
+                            select_data, incorrect_category_rule.rules
+                        ):
+                            return True, select_data
+                continue
+            if incorrect_category_rule is not None:
+                if await _check_category_by_rules(
+                    select_data, incorrect_category_rule.rules
+                ):
+                    continue
+                return True, select_data
+
+    # AIによるカテゴリ抽出の実装はここに追加
+    return False, select_data_list
+
+
+def _generate_css_selector(elem, soup):
+    """
+    要素からID、あるいはタグ名とクラスを組み合わせて
+    一意に特定可能なCSSセレクタを生成する
+    """
+    elem_id = elem.get("id")
+
+    if elem_id:
+        # 【ここがポイント】一番上(soup)から、そのIDを検索してみる
+        matches = soup.select(f"#{elem_id}")
+
+        if len(matches) == 1:
+            # 世界に一つだけなら、このIDだけでOK
+            return f"#{elem_id}"
+
+    path = []
+    curr = elem
+
+    while curr and curr.name != "[document]":
+        tag_name = curr.name
+
+        selector = tag_name
+
+        elem_id = curr.get("id")
+        if elem_id:
+            # IDに数字から始まるものや特殊文字が含まれる場合に備え [id="..."] 形式が安全
+            selector += f"#{elem_id}"
+            # break
+
+        # 2. クラス名を取得
+        classes = curr.get("class", [])
+
+        if classes:
+            # タグ名.クラス1.クラス2 の形式
+            selector += f".{'.'.join(classes)}"
+
+        # 3. 同階層に同じタグがある場合の順序 (nth-of-type)
+        # 兄弟要素の中で、自分と同じタグ名を持つ要素を探す
+        siblings = curr.parent.find_all(tag_name, recursive=False)
+        if len(siblings) > 1:
+            # indexは0から始まるので、CSS用に +1 する
+            index = siblings.index(curr) + 1
+            selector += f":nth-of-type({index})"
+
+        path.append(selector)
+        curr = curr.parent
+
+    path.reverse()
+    return " > ".join(path)
+
+
+async def find_custom_select_candidates(
+    html: str, original_select: SelectData
+) -> list[CustomSelectData]:
+    soup = BeautifulSoup(html, "lxml")
+
+    # ターゲットテキストの準備
+    target_texts = [
+        opt.text.strip() for opt in original_select.options if opt.text.strip()
+    ]
+    if not target_texts:
+        return []
+
+    target_set = set(target_texts)
+    # threshold = len(target_set) * 0.7
+    threshold = len(target_set) - 2
+    if threshold < 1:
+        threshold = 1
+
+    candidates_found = []
+
+    # 1. ページ内の全コンテナを取得
+    all_containers = soup.find_all(["div", "ul", "dl"])
+
+    for cand in all_containers:
+        # 自分の直下に、同じ条件を満たす別のコンテナがあるかチェック
+        # これがある場合、自分は「外側の枠（親）」に過ぎないと判断してスキップする
+        child_containers = cand.find_all(["div", "ul", "dl"], recursive=True)
+        has_better_child = False
+        for child in child_containers:
+            child_text = child.get_text("|", strip=True)
+            child_match_count = sum(1 for t in target_set if t in child_text)
+            if child_match_count >= threshold:
+                has_better_child = True
+                break
+
+        if has_better_child:
+            continue
+
+        # 2. 自分自身のスコア判定
+        cand_text = cand.get_text("|", strip=True)
+        match_count = sum(1 for t in target_set if t in cand_text)
+
+        if match_count >= threshold:
+            # ここまで来れば、それは「条件を満たす最小単位のコンテナ」
+            current_target_set = target_set.copy()
+            detected_options = []
+
+            # 選択肢要素を抽出
+            for item in cand.find_all(True, recursive=True):
+                txt = item.get_text(strip=True)
+                if txt in current_target_set:
+                    val = item.get("data-value") or item.get("href") or txt
+                    detected_options.append(OptionData(value=val, text=txt))
+                    current_target_set.remove(txt)
+
+            visible_analyze = _analyze_visibility(cand)
+
+            candidates_found.append(
+                CustomSelectData(
+                    id=cand.get("id"),
+                    selector=_generate_css_selector(cand, soup),
+                    class_list=cand.get("class", []),
+                    trigger_text=f"Match count: {match_count}",
+                    options=detected_options,
+                    linked_select_id=original_select.id,
+                    container_tag=cand.name,
+                    item_tag=detected_options[0].text if detected_options else "mixed",
+                    is_hidden=visible_analyze["is_hidden"],
+                    is_dynamic=visible_analyze["is_dynamic"],
+                )
+            )
+
+    return candidates_found

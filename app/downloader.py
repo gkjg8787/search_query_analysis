@@ -6,6 +6,7 @@ import re
 
 import nodriver as uc
 import structlog
+from bs4 import BeautifulSoup
 
 from models import (
     SearchURLAnalysisRequest,
@@ -14,11 +15,18 @@ from models import (
     AskGeminiErrorInfo,
     SearchURLAnalysisResponse,
     SearchBoxInfo,
+    CustomSelectData,
 )
 from req_gemini import generate_searchbox_info
-from category import check_category
 from url_analysis import URLPatternLogic
-from parser import extract_search_elements
+from parser import (
+    extract_search_elements,
+    check_category,
+    find_custom_select_candidates,
+    SelectData,
+    _generate_css_selector,
+    find_first_visible_ancestor,
+)
 from common.read_config import get_base_dir
 
 COOKIE_PATH = Path("/app/cookie/")
@@ -150,17 +158,21 @@ async def get_browser_version():
         # 正規表現でChromeのバージョン部分を抽出
         match = re.search(r"Chrome/(\d+\.\d+\.\d+\.\d+)", user_agent)
         try:
-            v = int(match.group(1))
+            full_version = match.group(1)
+            major_version = full_version.split(".")[0]
+            v = int(major_version)
+            chrome_version_fpath.parent.mkdir(parents=True, exist_ok=True)
             chrome_version_fpath.write_text(str(v))
             logger.info(f"Detected Chrome version: {v}")
             return v
         except ValueError:
             logger.exception(
-                f"Failed to parse Chrome version from user agent: {match.group(1)}"
+                f"Failed to parse Chrome version from user agent",
+                full_version=match.group(1),
             )
             return None
     except Exception as e:
-        logger.exception(f"Error detecting Chrome version: {e}")
+        logger.exception(f"Error detecting Chrome version", error=e)
         return None
     finally:
         browser.stop()
@@ -247,6 +259,265 @@ async def _get_page_with_ua(browser, useragent):
         )
     )
     return page
+
+
+async def is_really_visible(element):
+    """
+    JavaScriptを実行して、要素が実際に描画されているか（サイズがあるか）を確認する
+    """
+    # JSで要素の幅・高さ、および計算されたスタイルを確認
+    script = """
+    (el) => {
+        const style = window.getComputedStyle(el);
+        const rect = el.getBoundingClientRect();
+        return (
+            style.display !== 'none' &&
+            style.visibility !== 'hidden' &&
+            style.opacity !== '0' &&
+            rect.width > 0 &&
+            rect.height > 0
+        );
+    }
+    """
+    return await element.evaluate(script)
+
+
+async def find_visible_ancestor_nodriver(element):
+    """
+    nodriverの要素から親へ遡り、最初に「表示状態」にある要素を返す
+    """
+    curr = element
+    while curr:
+        # 現在の要素が実際に表示されているかJSで判定
+        is_visible = await element.evaluate(
+            """
+            (el) => {
+                const style = window.getComputedStyle(el);
+                return style.display !== 'none' && style.visibility !== 'hidden';
+            }
+        """
+        )
+
+        if is_visible:
+            return curr
+
+        # 親要素へ移動
+        curr = curr.parent
+        if not curr or curr.node_name == "HTML":
+            break
+
+    return None
+
+
+def get_structural_path(selector: str):
+    # セレクタからクラス名 (.class) を正規表現で削除
+    return re.sub(r"\.[a-zA-Z0-9_-]+", "", selector)
+
+
+def get_id_first_target_container(bef_cusdata_list, aft_cusdata_list):
+    target_container = None
+
+    def is_same_element(before: CustomSelectData, after: CustomSelectData):
+        # 1. IDがあれば最優先
+        if before.id and after.id:
+            return before.id == after.id
+
+        # 2. IDがない場合は、クラスを除去したパスで比較
+        return get_structural_path(before.selector) == get_structural_path(
+            after.selector
+        )
+
+    # 適用
+    for aft in aft_cusdata_list:
+        exists_before = next(
+            (b for b in bef_cusdata_list if is_same_element(b, aft)), None
+        )
+        if exists_before and exists_before.is_hidden and not aft.is_hidden:
+            target_container = aft
+            break
+    if not target_container:
+        logger.warning(
+            "not found target_container",
+            before_cusdata_list=bef_cusdata_list,
+            after_cusdata_list=aft_cusdata_list,
+        )
+        # 万が一見つからない場合、もっともオプション数が多い可視コンテナを予備とする
+        visible_cands = [c for c in aft_cusdata_list if not c.is_hidden]
+        if visible_cands:
+            logger.info("found target_container, set visible_cands[0]")
+            target_container = visible_cands[0]
+
+    return target_container
+
+
+async def _select_category(page, category_data: SelectData):
+
+    selected_index = 1
+    selected_category = {"value": None, "text": None}
+
+    if not category_data.options or len(category_data.options) < 2:
+        logger.warning(
+            f"Not enough options in category select element to select",
+            options=category_data.options,
+        )
+        return False, selected_category
+
+    selected_category["value"] = category_data.options[selected_index].value
+    selected_category["text"] = category_data.options[selected_index].text
+
+    def _generate_selector_by_id_or_name(category_data: SelectData):
+        if category_data.id:
+            base = f"select#{category_data.id}"
+        elif category_data.name:
+            base = f"select[name='{category_data.name}']"
+        elif category_data.class_list:
+            base = f"select.{'.'.join(category_data.class_list)}"
+        else:
+            base = "select"
+        base += f" option[value='{selected_category['value']}']"
+        return base
+
+    if category_data.visible:
+        selector = _generate_selector_by_id_or_name(category_data)
+        try:
+            select_elem = await page.select(selector)
+            await select_elem.select_option()
+            logger.info(
+                f"Interacted with category select element successfully",
+                selector=selector,
+                selected_category=selected_category,
+            )
+            return True, selected_category
+        except Exception as e:
+            logger.warning(
+                f"Failed to interact with category select element",
+                error=e,
+                selector=selector,
+            )
+            return False, selected_category
+    # if category_data.class_list:
+    #    for class_name in category_data.class_list:
+    #        selector = f"select.{class_name}"
+    #        selector += f" option[value='{selected_category['value']}']"
+    #        try:
+    #            select_elem = await page.select(selector)
+    #            await select_elem.select_option()
+    #            logger.info(
+    #                f"Interacted with category select element successfully",
+    #                selector=selector,
+    #                selected_category=selected_category,
+    #            )
+    #            break
+    #        except Exception as e:
+    #            logger.warning(
+    #                f"Failed to interact with category select element: {e}",
+    #                selector=selector,
+    #            )
+    #            continue
+    else:
+        close_cate_html = await page.get_content()
+        cusdata_list = await find_custom_select_candidates(
+            close_cate_html, category_data
+        )
+        open_cate_selector = _generate_selector_by_id_or_name(category_data)
+        soup = BeautifulSoup(close_cate_html, "lxml")
+
+        open_cate_elem = soup.select_one(open_cate_selector)
+
+        open_cate_elem = find_first_visible_ancestor(open_cate_elem)
+        if not open_cate_elem:
+            logger.warning("not found target open_category_selector")
+            return False, selected_category
+
+        open_cate_selector = _generate_css_selector(open_cate_elem, soup)
+        open_cate_elem = await page.select(open_cate_selector)
+        try:
+            await open_cate_elem.mouse_click()
+            await asyncio.sleep(0.5)
+            logger.info("Opened category", selector=open_cate_selector)
+        except Exception as e:
+            logger.warning(
+                f"Failed to open category", error=e, selector=open_cate_selector
+            )
+            return False, selected_category
+
+        open_cate_html = await page.get_content()
+        after_cusdata_list = await find_custom_select_candidates(
+            open_cate_html, category_data
+        )
+
+        target_container = get_id_first_target_container(
+            cusdata_list, after_cusdata_list
+        )
+
+        if not target_container:
+            logger.warning("Failed to find target custom select data.")
+            return False, selected_category
+
+        try:
+            # 1. コンテナ要素を取得
+            container_elem = await page.select(target_container.selector)
+            if not container_elem:
+                logger.warning(
+                    f"Failed to find container element with selector",
+                    selector=target_container.selector,
+                )
+                return False, selected_category
+
+            # 2. コンテナ内の「クリック対象になり得る全要素」をリストアップ
+            # li, a, span, div など、target_container.item_tag に基づく
+            # recursive に探すため、あえて全タグを対象にするのが確実
+            check_click_soup = BeautifulSoup(await page.get_content(), "lxml")
+            if not check_click_soup:
+                logger.warning(
+                    f"Failed get_content ", selector=target_container.selector
+                )
+                return False, selected_category
+            potential_items = check_click_soup.select_one(
+                target_container.selector
+            ).select("li, a, div, span, dt")
+            if not potential_items:
+                logger.warning("potential_items is empty")
+                return False, selected_category
+
+            target_text = selected_category["text"]
+
+            for item in potential_items:
+                # 要素のテキストを取得 (nodriver の Element.text プロパティ)
+                item_text = item.get_text().strip()
+
+                if item_text == target_text:
+                    # 3. マッチした要素を直接クリック
+                    try:
+                        item_selector = _generate_css_selector(item, check_click_soup)
+                        target_item = await page.select(item_selector)
+                        await target_item.mouse_click()
+                        await asyncio.sleep(0.5)
+                        logger.info(
+                            f"Custom select success",
+                            item_selector=item_selector,
+                            target_text=target_text,
+                        )
+                        return True, selected_category
+                    except Exception as e:
+                        logger.warning(
+                            f"Failed to click custom select item",
+                            error=e,
+                            selector=target_container.selector,
+                            item_text=item_text,
+                        )
+                        continue
+
+            logger.warning(
+                f"Could not find item with text",
+                target_text=target_text,
+                selctor=target_container.selector,
+            )
+            return False, selected_category
+
+        except Exception as e:
+            logger.warning(f"Failed custom interaction: {e}")
+            return False, selected_category
 
 
 async def get_search_query_result(req: SearchURLAnalysisRequest):
@@ -360,7 +631,10 @@ async def get_search_query_result(req: SearchURLAnalysisRequest):
                 )
 
         search_keyword = req.search_word or "ポケモン"
+        await searchbox.focus()
+        await asyncio.sleep(0.7)
         await searchbox.send_keys(search_keyword)
+        await asyncio.sleep(1)
         active_element_info = await page.evaluate(
             "document.activeElement.tagName + ' #' + document.activeElement.id + ' .' + document.activeElement.className"
         )
@@ -371,70 +645,11 @@ async def get_search_query_result(req: SearchURLAnalysisRequest):
         # category のセレクトボックスがあれば選択してみる
         # selectタグのみ対応
         selected_category = {"value": None, "text": None}
+        category_selected_ok = False
         if category_ok and category_data and category_data.options:
-            logger.info(
-                f"Category data found, trying to interact with category selection",
-                category_data=category_data.model_dump(),
+            category_selected_ok, selected_category = await _select_category(
+                page, category_data
             )
-            selected_index = 1
-
-            selected_category["value"] = category_data.options[selected_index].value
-            selected_category["text"] = category_data.options[selected_index].text
-
-            if category_data.id or category_data.name:
-                if category_data.id:
-                    selector = f"select#{category_data.id}"
-                elif category_data.name:
-                    selector = f"select[name='{category_data.name}']"
-                selector += f" option[value='{selected_category['value']}']"
-                try:
-                    select_elem = await page.select(selector)
-                    await select_elem.select_option()
-                    logger.info(
-                        f"Interacted with category select element successfully",
-                        selector=selector,
-                        selected_category=selected_category,
-                    )
-                except Exception as e:
-                    logger.warning(
-                        f"Failed to interact with category select element: {e}",
-                        selector=selector,
-                    )
-            elif category_data.class_list:
-                for class_name in category_data.class_list:
-                    selector = f"select.{class_name}"
-                    selector += f" option[value='{selected_category['value']}']"
-                    try:
-                        select_elem = await page.select(selector)
-                        await select_elem.select_option()
-                        logger.info(
-                            f"Interacted with category select element successfully",
-                            selector=selector,
-                            selected_category=selected_category,
-                        )
-                        break
-                    except Exception as e:
-                        logger.warning(
-                            f"Failed to interact with category select element: {e}",
-                            selector=selector,
-                        )
-                        continue
-            else:
-                try:
-                    select_elem = await page.select(
-                        f"select option[value='{selected_category['value']}']"
-                    )
-                    await select_elem.select_option()
-                    logger.info(
-                        f"Interacted with category select element successfully",
-                        selector=selector,
-                        selected_category=selected_category,
-                    )
-                except Exception as e:
-                    logger.warning(
-                        f"Failed to interact with category select element: {e}",
-                        selector=selector,
-                    )
 
         for btn_selector in searchboxinfo.search_button_list:
             try:
@@ -467,10 +682,10 @@ async def get_search_query_result(req: SearchURLAnalysisRequest):
         search_content = await page.get_content()
 
         after_search_url = page.url
-        if selected_category["value"]:
+        category_val = ""
+        if category_selected_ok and selected_category["value"]:
             category_val = selected_category["value"]
-        else:
-            category_val = ""
+
         url_analysis = URLPatternLogic(
             target_url=after_search_url,
             keyword=search_keyword,
