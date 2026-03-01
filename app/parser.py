@@ -188,10 +188,12 @@ async def extract_search_elements(html_content: str) -> dict[str, list[str]]:
 
     input_candidates.sort(key=lambda x: x[0], reverse=True)
     search_input_set = set()
+    search_input_list = []
     for _, tag in input_candidates:
         sel = _generate_css_selector(tag, soup)
-        if sel:
+        if sel and sel not in search_input_set:
             search_input_set.add(sel)
+            search_input_list.append(sel)
             if len(search_input_set) >= 3:
                 break
 
@@ -252,16 +254,18 @@ async def extract_search_elements(html_content: str) -> dict[str, list[str]]:
 
     button_candidates.sort(key=lambda x: x[0], reverse=True)
     search_button_set = set()
+    search_button_list = []
     for _, tag in button_candidates:
         sel = _generate_css_selector(tag, soup)
-        if sel:
+        if sel and sel not in search_button_set:
             search_button_set.add(sel)
+            search_button_list.append(sel)
             if len(search_button_set) >= 3:
                 break
 
     return {
-        "search_input_list": list(search_input_set),
-        "search_button_list": list(search_button_set),
+        "search_input_list": search_input_list,
+        "search_button_list": search_button_list,
     }
 
 

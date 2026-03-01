@@ -47,7 +47,11 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 
 
-@app.post("/searchurl/analysis/", response_model=SearchURLAnalysisResponse)
+@app.post(
+    "/searchurl/analysis/",
+    response_model=SearchURLAnalysisResponse,
+    response_model_exclude_none=True,
+)
 async def generate_search_query(request: Request, suareq: SearchURLAnalysisRequest):
     structlog.contextvars.clear_contextvars()
     structlog.contextvars.bind_contextvars(
