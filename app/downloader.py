@@ -9,11 +9,11 @@ import structlog
 from bs4 import BeautifulSoup
 
 from models import (
-    SearchURLAnalysisRequest,
+    SearchURLProbeRequest,
     ErrorDetail,
     WaitCSSSelector,
     AskGeminiErrorInfo,
-    SearchURLAnalysisResponse,
+    SearchURLProbeResponse,
     SearchBoxInfo,
     CustomSelectData,
 )
@@ -520,7 +520,7 @@ async def _select_category(page, category_data: SelectData):
             return False, selected_category
 
 
-async def get_search_query_result(req: SearchURLAnalysisRequest):
+async def get_search_query_result(req: SearchURLProbeRequest):
     logger.debug(f"input_params : {req.model_dump()}")
     browser = None
     page = None
@@ -558,7 +558,7 @@ async def get_search_query_result(req: SearchURLAnalysisRequest):
         html_content = await page.get_content()
 
         if not html_content:
-            return False, SearchURLAnalysisResponse(
+            return False, SearchURLProbeResponse(
                 error=ErrorDetail(
                     error_type="NoContentError",
                     error_msg="Failed to retrieve HTML content from the page",
@@ -603,7 +603,7 @@ async def get_search_query_result(req: SearchURLAnalysisRequest):
         if not searchboxinfo.search_input_list or not searchboxinfo.search_button_list:
             return (
                 False,
-                SearchURLAnalysisResponse(
+                SearchURLProbeResponse(
                     error=ErrorDetail(
                         error_type="SearchBoxInfoError",
                         error_msg="Failed to extract search box information from the page",
@@ -623,7 +623,7 @@ async def get_search_query_result(req: SearchURLAnalysisRequest):
                 )
 
             if selector == searchboxinfo.search_input_list[-1]:
-                return False, SearchURLAnalysisResponse(
+                return False, SearchURLProbeResponse(
                     error=ErrorDetail(
                         error_type=f"SearchBoxInteractionError: {type(e).__name__}",
                         error_msg=f"Failed to find or interact with search box: {e}",
@@ -669,7 +669,7 @@ async def get_search_query_result(req: SearchURLAnalysisRequest):
                     logger.exception(
                         f"Failed to find or interact with any of the search buttons: {searchboxinfo.search_buttons}"
                     )
-                    return False, SearchURLAnalysisResponse(
+                    return False, SearchURLProbeResponse(
                         error=ErrorDetail(
                             error_type=f"SearchButtonInteractionError: {type(e).__name__}",
                             error_msg=f"Failed to find or interact with search button: {e}",
@@ -694,7 +694,7 @@ async def get_search_query_result(req: SearchURLAnalysisRequest):
 
         logger.debug(f"url_analysis : {url_analysis.model_dump()}")
 
-        result = SearchURLAnalysisResponse(
+        result = SearchURLProbeResponse(
             url_info=url_analysis,
         )
         if category_ok and category_data:
@@ -704,7 +704,7 @@ async def get_search_query_result(req: SearchURLAnalysisRequest):
 
     except Exception as e:
         logger.exception("other error")
-        return False, SearchURLAnalysisResponse(
+        return False, SearchURLProbeResponse(
             error=ErrorDetail(
                 error_type=type(e).__name__,
                 error_msg=str(e),

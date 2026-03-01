@@ -47,7 +47,7 @@ class UserAgent(BaseModel):
     os_version: str = "10.0.0"
 
 
-class SearchURLAnalysisRequest(BaseModel):
+class SearchURLProbeRequest(BaseModel):
     url: str
     search_word: str | None = None
     cookie: Optional[Cookie] = None
@@ -150,7 +150,7 @@ class URLAnalysisModel(BaseModel):
     parameters: dict[str, ParameterDetail]
 
 
-class SearchURLAnalysisResponse(BaseModel):
+class SearchURLProbeResponse(BaseModel):
     url_info: URLAnalysisModel | None = None
     categories: SelectData | None = None
     error: ErrorDetail | None = None
@@ -220,4 +220,15 @@ class GenerateSearchURLResponse(BaseModel):
         description="Generated search URL based on the input parameters",
         max_length=500,
     )
+    error: ErrorDetail | None = None
+
+
+class SearchURLAnalysisRequest(BaseModel):
+    url: str
+    search_word: str
+    category_value: str = Field(default="")
+
+
+class SearchURLAnalysisResponse(BaseModel):
+    url_info: URLAnalysisModel | None = None
     error: ErrorDetail | None = None

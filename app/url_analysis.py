@@ -292,8 +292,6 @@ class URLPatternLogic:
             else:
                 query_parts.append(f"{k}={vs[0]}")
 
-        # template = f"{base_url}/{'/'.join(template_segments)}/"
-        # if query_parts: template += "?" + "&".join(query_parts)
         if query_parts:
             template_path += "?" + "&".join(query_parts)
 

@@ -7,15 +7,17 @@ from fastapi import FastAPI, Request
 import structlog
 
 from models import (
-    SearchURLAnalysisRequest,
-    SearchURLAnalysisResponse,
+    SearchURLProbeRequest,
+    SearchURLProbeResponse,
     ErrorDetail,
     GenerateSearchURLResponse,
     GenerateSearchURLRequest,
+    SearchURLAnalysisRequest,
+    SearchURLAnalysisResponse,
 )
 from downloader import get_search_query_result
 from common.logger_config import configure_logger
-from url_analysis import build_url
+from url_analysis import build_url, URLPatternLogic
 
 configure_logger(filename="app.log", logging_level="INFO")
 logger = structlog.get_logger(__name__)
@@ -52,17 +54,39 @@ app = FastAPI(lifespan=lifespan)
     response_model=SearchURLAnalysisResponse,
     response_model_exclude_none=True,
 )
-async def generate_search_query(request: Request, suareq: SearchURLAnalysisRequest):
+async def analyze_search_url(request: Request, req: SearchURLAnalysisRequest):
+    structlog.contextvars.clear_contextvars()
+    structlog.contextvars.bind_contextvars(
+        outer_path=request.url.path,
+        request_id=str(uuid.uuid4()),
+    )
+    log = structlog.get_logger(__name__)
+    log.info("Received request for search URL analysis", req=req)
+    url_analysis = URLPatternLogic(
+        target_url=req.url,
+        keyword=req.search_word,
+        category_val=req.category_value,
+    ).analyze()
+    log.info("Completed request for search URL analysis", url_analysis=url_analysis)
+    return SearchURLAnalysisResponse(url_info=url_analysis)
+
+
+@app.post(
+    "/searchurl/probe/",
+    response_model=SearchURLProbeResponse,
+    response_model_exclude_none=True,
+)
+async def generate_search_query(request: Request, suareq: SearchURLProbeRequest):
     structlog.contextvars.clear_contextvars()
     structlog.contextvars.bind_contextvars(
         router_path=request.url.path,
         request_id=str(uuid.uuid4()),
     )
     log = structlog.get_logger(__name__)
-    log.info("Received request for search URL analysis", suareq=suareq)
+    log.info("Received request for search URL probe", suareq=suareq)
     success, result = await get_search_query_result(suareq)
     log.info(
-        "Completed request for search URL analysis",
+        "Completed request for search URL probe",
         success=success,
         result=result.model_dump(),
     )
