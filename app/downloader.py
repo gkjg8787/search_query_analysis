@@ -12,12 +12,10 @@ from models import (
     SearchURLProbeRequest,
     ErrorDetail,
     WaitCSSSelector,
-    AskGeminiErrorInfo,
     SearchURLProbeResponse,
     SearchBoxInfo,
     CustomSelectData,
 )
-from req_gemini import generate_searchbox_info
 from url_analysis import URLPatternLogic
 from parser import (
     extract_search_elements,
@@ -395,25 +393,7 @@ async def _select_category(page, category_data: SelectData):
                 selector=selector,
             )
             return False, selected_category
-    # if category_data.class_list:
-    #    for class_name in category_data.class_list:
-    #        selector = f"select.{class_name}"
-    #        selector += f" option[value='{selected_category['value']}']"
-    #        try:
-    #            select_elem = await page.select(selector)
-    #            await select_elem.select_option()
-    #            logger.info(
-    #                f"Interacted with category select element successfully",
-    #                selector=selector,
-    #                selected_category=selected_category,
-    #            )
-    #            break
-    #        except Exception as e:
-    #            logger.warning(
-    #                f"Failed to interact with category select element: {e}",
-    #                selector=selector,
-    #            )
-    #            continue
+
     else:
         close_cate_html = await page.get_content()
         cusdata_list = await find_custom_select_candidates(

@@ -3,5 +3,4 @@ uvicorn[standard]
 nodriver
 structlog
 bs4
-google-genai
 lxml

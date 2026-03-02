@@ -60,10 +60,6 @@ def get_log_options():
     return LogOptions(**lower_key_dict)
 
 
-def get_ai_model_list():
-    return settings.AI_MODEL_LIST
-
-
 def get_extract_category_options():
     lower_key_dict = to_lower_keys(settings.EXTRACT_CATEGORY)
     return ExtractCategoryOptions(**lower_key_dict)
