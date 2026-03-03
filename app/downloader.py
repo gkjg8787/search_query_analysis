@@ -554,19 +554,6 @@ async def get_search_query_result(req: SearchURLProbeRequest):
             except Exception as e:
                 logger.exception(f"Error saving cookies to file: {e}")
 
-        # AI
-        # ret = await generate_searchbox_info(html_content)
-        # searchboxinfo = SearchBoxInfo(
-        #     search_input_list=[ret.search_input_box],
-        #     search_button_list=ret.search_buttons,
-        # )
-        # if isinstance(searchboxinfo, AskGeminiErrorInfo):
-        #    return False, SearchURLAnalysisResponse(
-        #        error=ErrorDetail(
-        #            error_type=searchboxinfo.error_type,
-        #            error_msg=searchboxinfo.error,
-        #          )
-        #   )
         ret = await extract_search_elements(html_content)
         searchboxinfo = SearchBoxInfo(
             search_input_list=ret["search_input_list"],
@@ -647,7 +634,7 @@ async def get_search_query_result(req: SearchURLProbeRequest):
                 )
                 if btn_selector == searchboxinfo.search_button_list[-1]:
                     logger.exception(
-                        f"Failed to find or interact with any of the search buttons: {searchboxinfo.search_buttons}"
+                        f"Failed to find or interact with any of the search buttons: {searchboxinfo.search_button_list}"
                     )
                     return False, SearchURLProbeResponse(
                         error=ErrorDetail(
