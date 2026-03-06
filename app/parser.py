@@ -141,6 +141,149 @@ def extract_select_options(html_content: str) -> list[SelectData]:
 async def extract_search_elements(html_content: str) -> dict[str, list[str]]:
     soup = BeautifulSoup(html_content, "lxml")
 
+    def get_attr_str(tag, attr_name):
+        val = tag.attrs.get(attr_name, "")
+        return " ".join(val).lower() if isinstance(val, list) else str(val).lower()
+
+    # --- Search Input Candidates ---
+    all_inputs = soup.find_all(["input", "textarea"])
+    input_candidates = []
+
+    for tag in all_inputs:
+        score = 0
+        attrs = tag.attrs
+        t = attrs.get("type", "text").lower()
+
+        # 除外：hidden は絶対だが、それ以外はスコアで判断
+        if t == "hidden":
+            continue
+
+        # A. 属性の強力一致 (ヨドバシ: getJsonData / 楽天: sitem / ヤフショ: inputField)
+        attr_text = (
+            get_attr_str(tag, "id")
+            + " "
+            + get_attr_str(tag, "name")
+            + " "
+            + get_attr_str(tag, "class")
+        )
+
+        # ヨドバシの 'word' や 'getjsondata'、一般的な 'q', 's' を最優先
+        if re.search(r"\b(word|q|s|keyword|query|getjsondata|search)\b", attr_text):
+            score += 60
+
+        # B. テキスト入力としての適格性
+        if t in ["text", "search"]:
+            score += 20
+        elif t in ["checkbox", "radio"]:  # ヨドバシのサイドメニュー対策
+            score -= 50
+
+        # C. プレースホルダー/Aria (GreenBeans等)
+        placeholder_aria = (
+            get_attr_str(tag, "placeholder") + " " + get_attr_str(tag, "aria-label")
+        )
+        if any(k in placeholder_aria for k in ["search", "検索", "キーワード"]):
+            score += 40
+
+        # D. フォームコンテキスト
+        if tag.find_parent("form"):
+            score += 15
+
+        if score > 30:
+            input_candidates.append((score, tag))
+
+    # --- Search Button Candidates ---
+    # a, div も含めるが、まずは button/input[type=submit] を厚遇
+    elements = soup.find_all(["input", "button", "a", "div", "svg"])
+    button_candidates = []
+
+    for tag in elements:
+        score = 0
+        name = tag.name.lower()
+        attr_all = (
+            get_attr_str(tag, "id")
+            + " "
+            + get_attr_str(tag, "class")
+            + " "
+            + get_attr_str(tag, "name")
+        )
+
+        # 1. ヨドバシ: #js_keywordSearchBtn, #srcBtn / マツキヨ: #xxx_submit
+        if re.search(
+            r"(js_keywordsearchbtn|srcbtn|submit|search_btn|search_icon|search-button)",
+            attr_all,
+        ):
+            score += 70
+
+        # 2. タグ種別加点
+        if name == "input" and tag.attrs.get("type", "").lower() in ["submit", "image"]:
+            score += 40
+        elif name == "button":
+            score += 35
+
+        # 3. 視覚的シグナル (SVGアイコン、aria-label、テキスト)
+        text_val = tag.get_text(" ", strip=True).lower()
+        aria_val = get_attr_str(tag, "aria-label")
+        alt_val = get_attr_str(tag, "alt")
+        if any(
+            k in (text_val + aria_val + alt_val) for k in ["search", "検索", "探す"]
+        ):
+            score += 40
+
+        # 4. 構造的制約 (楽天の「ボタンの中のdiv」等を救済)
+        parent_text = ""
+        curr = tag.parent
+        # 親要素を遡ってコンテキストを確認
+        depth = 0
+        while curr and depth < 5:
+            p_attr = (
+                get_attr_str(curr, "id") + " " + get_attr_str(curr, "class")
+            ).lower()
+            if "header" in curr.name or "header" in p_attr:
+                score += 30  # ヘッダー内なら大幅加点
+                break
+            if any(k in p_attr for k in ["sidebar", "side-nav", "modal", "filter"]):
+                score -= 50  # サイドバーやフィルタ、モーダル内は大幅減点
+                break
+            curr = curr.parent
+            depth += 1
+        # 「自分の中にボタンが含まれているdiv」は、自分ではなく中身が正解なので減点
+        if name == "div" and tag.find(["button", "input"]):
+            score -= 30
+
+        # 5. フォーム内ボーナス
+        if tag.find_parent("form"):
+            score += 20
+
+        if score > 30:
+            button_candidates.append((score, tag))
+
+    # --- 最終選別ロジック ---
+    def finalize(candidates, limit=5):  # 順位が重要なため少し多めに保持
+        candidates.sort(key=lambda x: x[0], reverse=True)
+        unique_sels = []
+        seen = set()
+        for _, tag in candidates:
+            try:
+                sel = _generate_css_selector(tag, soup)
+                if sel and sel not in seen:
+                    # ヨドバシのように酷似したパスが出る場合、短いID優先
+                    seen.add(sel)
+                    unique_sels.append(sel)
+                if len(unique_sels) >= limit:
+                    break
+            except:
+                continue
+        return unique_sels
+
+    return {
+        "search_input_list": finalize(input_candidates),
+        "search_button_list": finalize(button_candidates),
+    }
+
+
+async def _old_extract_search_elements(html_content: str) -> dict[str, list[str]]:
+    soup = BeautifulSoup(html_content, "lxml")
+
     # --- Search Input Candidates ---
     inputs = soup.find_all("input")
     input_candidates = []

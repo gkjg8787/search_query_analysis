@@ -2,7 +2,8 @@ import asyncio
 from pathlib import Path
 from urllib.parse import urlparse
 import re
-
+from contextlib import asynccontextmanager
+import time
 
 import nodriver as uc
 import structlog
@@ -31,6 +32,10 @@ COOKIE_PATH = Path("/app/cookie/")
 DEFAULT_WAIT_TIME = {
     "first_load": 10,
     "after_search": 10,
+    "focus": 0.5,
+    "mouse_click": 0.5,
+    "send_keys": 1,
+    "after_stop": 1,
 }
 
 logger = structlog.get_logger(__name__)
@@ -174,7 +179,7 @@ async def get_browser_version():
         return None
     finally:
         browser.stop()
-        await asyncio.sleep(1)
+        await asyncio.sleep(DEFAULT_WAIT_TIME["after_stop"])
 
 
 async def get_domain_from_url(url: str) -> str:
@@ -257,6 +262,47 @@ async def _get_page_with_ua(browser, useragent):
         )
     )
     return page
+
+
+@asynccontextmanager
+async def status_monitor_list(tab, url, exact_match=True):
+    """
+    受信した全てのステータスコードを時系列でリストに蓄積する
+    """
+    # 履歴を保存するリスト
+    history = []
+
+    async def handler(event: uc.cdp.network.ResponseReceived):
+        # ターゲットURLが含まれるレスポンスをすべて記録
+        if exact_match:
+            if event.response.url == url:
+                history.append(
+                    {
+                        "status": event.response.status,
+                        "url": event.response.url,
+                        "timestamp": time.perf_counter(),
+                        "type": event.type_,  # Document, Fetch, XHR 等の判別用
+                    }
+                )
+        else:
+            if url in event.response.url:
+                history.append(
+                    {
+                        "status": event.response.status,
+                        "url": event.response.url,
+                        "timestamp": time.perf_counter(),
+                        "type": event.type_,  # Document, Fetch, XHR 等の判別用
+                    }
+                )
+
+    tab.add_handler(uc.cdp.network.ResponseReceived, handler)
+
+    try:
+        # 呼び出し側にはリストの参照を渡す
+        yield history
+    finally:
+        # 必ずハンドラーを解除
+        tab.remove_handler(uc.cdp.network.ResponseReceived, handler)
 
 
 async def is_really_visible(element):
@@ -413,7 +459,7 @@ async def _select_category(page, category_data: SelectData):
         open_cate_elem = await page.select(open_cate_selector)
         try:
             await open_cate_elem.mouse_click()
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(DEFAULT_WAIT_TIME["mouse_click"])
             logger.info("Opened category", selector=open_cate_selector)
         except Exception as e:
             logger.warning(
@@ -472,7 +518,7 @@ async def _select_category(page, category_data: SelectData):
                         item_selector = _generate_css_selector(item, check_click_soup)
                         target_item = await page.select(item_selector)
                         await target_item.mouse_click()
-                        await asyncio.sleep(0.5)
+                        await asyncio.sleep(DEFAULT_WAIT_TIME["mouse_click"])
                         logger.info(
                             f"Custom select success",
                             item_selector=item_selector,
@@ -508,32 +554,68 @@ async def get_search_query_result(req: SearchURLProbeRequest):
         browser = await _get_browser_with_ua(req.useragent)
         page = await _get_page_with_ua(browser, req.useragent)
         top_page_url = urlparse(req.url)._replace(query="", fragment="").geturl()
-        page = await page.get(top_page_url)
 
-        if req.cookie:
-            if req.cookie.load:
-                try:
-                    cookie_fpath = await get_cookie_filepath(
-                        filename=req.cookie.filename, url=req.url
+        async with status_monitor_list(page, top_page_url, exact_match=True) as history:
+
+            page = await page.get(top_page_url)
+
+            if req.cookie:
+                if req.cookie.load:
+                    try:
+                        cookie_fpath = await get_cookie_filepath(
+                            filename=req.cookie.filename, url=req.url
+                        )
+                        await browser.cookies.load(cookie_fpath)
+                    except Exception as e:
+                        logger.exception(f"Error loading cookies from file: {e}")
+
+                if req.cookie.cookie_dict_list:
+                    br_cookies = await _cookie_to_param(await browser.cookies.get_all())
+                    included_cookies = await _add_cookies(
+                        add_cookies=req.cookie.cookie_dict_list, base_cookies=br_cookies
                     )
-                    await browser.cookies.load(cookie_fpath)
-                except Exception as e:
-                    logger.exception(f"Error loading cookies from file: {e}")
+                    await _set_cookies(browser.cookies, included_cookies)
 
-            if req.cookie.cookie_dict_list:
-                br_cookies = await _cookie_to_param(await browser.cookies.get_all())
-                included_cookies = await _add_cookies(
-                    add_cookies=req.cookie.cookie_dict_list, base_cookies=br_cookies
+                if req.cookie.load or req.cookie.cookie_dict_list:
+                    await page.reload()
+
+            if req.page_wait_time and req.page_wait_time > 0:
+                first_wait_time = req.page_wait_time
+            else:
+                first_wait_time = DEFAULT_WAIT_TIME["first_load"]
+            if first_wait_time > 0:
+                await asyncio.sleep(first_wait_time)
+
+        if not history:
+            return False, SearchURLProbeResponse(
+                error=ErrorDetail(
+                    error_type="NoStatusCode",
+                    error_msg="Failed to retrieve status code from the page",
                 )
-                await _set_cookies(browser.cookies, included_cookies)
-
-            if req.cookie.load or req.cookie.cookie_dict_list:
-                await page.reload()
-
-        if req.page_wait_time and req.page_wait_time > 0:
-            await asyncio.sleep(req.page_wait_time)
+            )
+        # 最終status_code
+        if history[-1].get("status"):
+            try:
+                latest_status = int(history[-1]["status"])
+            except:
+                logger.warning(
+                    "Failed to parse status code", status_code_history=history[-1]
+                )
+                latest_status = 0
+            if latest_status >= 400:
+                logger.error(
+                    "Status code error",
+                    status_code_history=history,
+                    latest_status=latest_status,
+                )
+                return False, SearchURLProbeResponse(
+                    error=ErrorDetail(
+                        error_type="StatusCodeError",
+                        error_msg=f"Status code error: {history[-1]}",
+                    )
+                )
         else:
-            await asyncio.sleep(DEFAULT_WAIT_TIME["first_load"])
+            logger.warning("No status code", status_code_history=history)
 
         html_content = await page.get_content()
 
@@ -599,9 +681,9 @@ async def get_search_query_result(req: SearchURLProbeRequest):
 
         search_keyword = req.search_word or "ポケモン"
         await searchbox.focus()
-        await asyncio.sleep(0.7)
+        await asyncio.sleep(DEFAULT_WAIT_TIME["focus"])
         await searchbox.send_keys(search_keyword)
-        await asyncio.sleep(1)
+        await asyncio.sleep(DEFAULT_WAIT_TIME["send_keys"])
         active_element_info = await page.evaluate(
             "document.activeElement.tagName + ' #' + document.activeElement.id + ' .' + document.activeElement.className"
         )
