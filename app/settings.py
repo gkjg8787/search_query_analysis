@@ -60,7 +60,14 @@ EXTRACT_CATEGORY = {
             {
                 "match_type": "exact",
                 "match_threshold": 1,
-                "match_list": ["安い順", "人気順", "新着順", "発売日"],
+                "match_list": [
+                    "安い順",
+                    "人気順",
+                    "おすすめ順",
+                    "オススメ順",
+                    "新着順",
+                    "発売日",
+                ],
             },
         ],
     },
