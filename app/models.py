@@ -131,7 +131,6 @@ class SearchURLProbeRequest(BaseModel):
     url: str
     search_word: str | None = None
     cookie: Optional[Cookie] = None
-    wait_css_selector: Optional[WaitCSSSelector] = None
     page_wait_time: Optional[float] = None
     useragent: UserAgent | None = UserAgent()
 
