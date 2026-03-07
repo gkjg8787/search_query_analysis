@@ -47,6 +47,21 @@ class UserAgent(BaseModel):
     os_version: str = "10.0.0"
 
 
+class DownloadRequest(BaseModel):
+    url: str
+    cookie: Optional[Cookie] = None
+    wait_css_selector: Optional[WaitCSSSelector] = None
+    page_wait_time: Optional[float] = None
+    actions: list[Wait | Scroll] = Field(default_factory=list)
+    useragent: UserAgent | None = UserAgent()
+
+
+class DownloadResponse(BaseModel):
+    result: str = ""
+    cookies: list[dict[str, Any]] = []
+    error: ErrorDetail = ErrorDetail()
+
+
 class SearchBoxInfo(BaseModel):
     search_input_list: list[str] = Field(
         default_factory=list,
@@ -166,3 +181,11 @@ class SearchURLAnalysisRequest(BaseModel):
 class SearchURLAnalysisResponse(BaseModel):
     url_info: URLAnalysisModel | None = None
     error: ErrorDetail | None = None
+
+
+class NoStatusCode(Exception):
+    pass
+
+
+class StatusCodeError(Exception):
+    pass

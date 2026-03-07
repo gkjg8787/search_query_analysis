@@ -14,8 +14,10 @@ from models import (
     GenerateSearchURLRequest,
     SearchURLAnalysisRequest,
     SearchURLAnalysisResponse,
+    DownloadResponse,
+    DownloadRequest,
 )
-from downloader import get_search_query_result
+from downloader import get_search_query_result, dl_with_nodriver
 from common.logger_config import configure_logger
 from url_analysis import build_url, URLPatternLogic
 
@@ -50,7 +52,7 @@ app = FastAPI(lifespan=lifespan)
 
 
 @app.post(
-    "/searchurl/analysis/",
+    "/searchurl/analysis",
     response_model=SearchURLAnalysisResponse,
     response_model_exclude_none=True,
 )
@@ -72,7 +74,7 @@ async def analyze_search_url(request: Request, req: SearchURLAnalysisRequest):
 
 
 @app.post(
-    "/searchurl/probe/",
+    "/searchurl/probe",
     response_model=SearchURLProbeResponse,
     response_model_exclude_none=True,
 )
@@ -93,7 +95,7 @@ async def generate_search_query(request: Request, suareq: SearchURLProbeRequest)
     return result
 
 
-@app.post("/searchurl/generate/", response_model=GenerateSearchURLResponse)
+@app.post("/searchurl/generate", response_model=GenerateSearchURLResponse)
 async def generate_search_url(request: Request, req: GenerateSearchURLRequest):
     structlog.contextvars.clear_contextvars()
     structlog.contextvars.bind_contextvars(
@@ -108,3 +110,16 @@ async def generate_search_url(request: Request, req: GenerateSearchURLRequest):
     )
     log.info("Completed request for search URL generation", url=url)
     return GenerateSearchURLResponse(url=url)
+
+
+@app.post("/download", response_model=DownloadResponse)
+async def download_html(request: DownloadRequest):
+    success, result, cookies = await dl_with_nodriver(request)
+
+    if success:
+        return DownloadResponse(result=result, cookies=cookies)
+    else:
+        error_details = ErrorDetail(
+            error_msg=str(result), error_type=type(result).__name__
+        )
+        return DownloadResponse(error=error_details)

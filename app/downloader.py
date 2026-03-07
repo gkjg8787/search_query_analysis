@@ -16,6 +16,11 @@ from models import (
     SearchURLProbeResponse,
     SearchBoxInfo,
     CustomSelectData,
+    DownloadRequest,
+    Scroll,
+    Wait,
+    NoStatusCode,
+    StatusCodeError,
 )
 from url_analysis import URLPatternLogic
 from parser import (
@@ -692,6 +697,191 @@ async def get_search_query_result(req: SearchURLProbeRequest):
                 error_msg=str(e),
             )
         )
+    finally:
+        if browser:
+            try:
+                browser.stop()
+            except Exception:
+                logger.exception("browser stop error")
+
+
+async def _wait_css_selector(page, selector: WaitCSSSelector):
+    if selector.pre_wait_time and selector.pre_wait_time > 0:
+        await asyncio.sleep(selector.pre_wait_time)
+    if selector.on_error:
+        max_retry = (
+            selector.on_error.max_retries
+            if selector.on_error.max_retries and selector.on_error.max_retries > 0
+            else 1
+        )
+    else:
+        max_retry = 1
+    for retry_count in range(max_retry):
+        try:
+            await page.wait_for(
+                selector=selector.selector,
+                timeout=selector.timeout,
+            )
+            return
+        except Exception as e:
+            logger.warning(
+                f"Waiting for selector '{selector.selector}' failed: {e}, retry_count={retry_count}"
+            )
+            if retry_count >= max_retry - 1:
+                logger.error(
+                    f"Max retries reached for selector '{selector.selector}', retry_count={retry_count}"
+                )
+                raise e
+            if selector.on_error.action_type == "raise":
+                logger.error(
+                    f"Raising error for selector '{selector.selector}' as per on_error action"
+                )
+                raise e
+            elif selector.on_error.action_type == "retry":
+                wait_time = (
+                    selector.on_error.wait_time
+                    if selector.on_error.wait_time and selector.on_error.wait_time > 0
+                    else 0
+                )
+                if wait_time > 0 and selector.on_error.check_exist_tag:
+                    elem = await page.select(
+                        selector.on_error.check_exist_tag, timeout=wait_time
+                    )
+                    if elem is None:
+                        logger.error(
+                            f"Check exist tag '{selector.on_error.check_exist_tag}' not found, raising error"
+                        )
+                        raise e
+                    if elem:
+                        logger.info(
+                            f"Check exist tag '{selector.on_error.check_exist_tag}' found, stopping retries"
+                        )
+                        return
+                    logger.warning(
+                        f"Check exist tag '{selector.on_error.check_exist_tag}' not found, continuing retries"
+                    )
+                    continue
+                logger.info(
+                    f"Retrying to wait for selector '{selector.selector}', retry_count={retry_count + 1}"
+                )
+                continue
+            else:
+                logger.error(
+                    f"Unknown on_error action_type '{selector.on_error.action_type}' for selector '{selector.selector}'"
+                )
+                raise e
+
+
+async def dl_with_nodriver(req: DownloadRequest):
+    logger.debug(f"input_params : {req.model_dump()}")
+    browser = None
+    page = None
+    try:
+        browser = await _get_browser_with_ua(req.useragent)
+        page = await _get_page_with_ua(browser, req.useragent)
+
+        async with status_monitor_list(page, req.url, exact_match=True) as history:
+            page = await page.get(req.url)
+            if req.cookie:
+                if req.cookie.load:
+                    try:
+                        cookie_fpath = await get_cookie_filepath(
+                            filename=req.cookie.filename, url=req.url
+                        )
+                        await browser.cookies.load(cookie_fpath)
+                    except Exception as e:
+                        logger.error(f"Error loading cookies from file: {e}")
+
+                if req.cookie.cookie_dict_list:
+                    br_cookies = await _cookie_to_param(await browser.cookies.get_all())
+                    included_cookies = await _add_cookies(
+                        add_cookies=req.cookie.cookie_dict_list, base_cookies=br_cookies
+                    )
+                    await _set_cookies(browser.cookies, included_cookies)
+
+                if req.cookie.load or req.cookie.cookie_dict_list:
+                    await page.reload()
+
+            if not req.actions:
+                req.actions = []
+            for action in req.actions:
+                if isinstance(action, Wait):
+                    await asyncio.sleep(action.time)
+                    continue
+                elif isinstance(action, Scroll):
+                    if action.to_bottom:
+                        await page.evaluate(
+                            """() => {
+                                window.scrollTo(0, document.body.scrollHeight);
+                            }"""
+                        )
+                    elif action.amount:
+                        await page.scroll_down(action.amount)
+                    if action.pause_time and action.pause_time > 0:
+                        await asyncio.sleep(action.pause_time)
+                    continue
+
+            if req.wait_css_selector:
+                try:
+                    await _wait_css_selector(page, req.wait_css_selector)
+                except Exception as e:
+                    logger.error(f"Error waiting for CSS selector: {e}")
+                    return False, e, []
+            elif req.page_wait_time:
+                await asyncio.sleep(req.page_wait_time)
+
+        if not history:
+            return (
+                False,
+                NoStatusCode("Failed to retrieve status code from the page"),
+                [],
+            )
+
+        # 最終status_code
+        if history[-1].get("status"):
+            try:
+                latest_status = int(history[-1]["status"])
+            except:
+                logger.warning(
+                    "Failed to parse status code", status_code_history=history[-1]
+                )
+                latest_status = 0
+            if latest_status >= 400:
+                logger.error(
+                    "Status code error",
+                    status_code_history=history,
+                    latest_status=latest_status,
+                )
+                return (
+                    False,
+                    StatusCodeError(
+                        f"Status code error: {history[-1]}",
+                    ),
+                    [],
+                )
+        else:
+            logger.warning("No status code", status_code_history=history)
+
+        html_content = await page.get_content()
+        cookies = []
+        if req.cookie and req.cookie.save:
+            try:
+                cookie_fpath = await get_cookie_filepath(
+                    filename=req.cookie.filename, url=req.url
+                )
+                await browser.cookies.save(cookie_fpath)
+            except Exception as e:
+                logger.error(f"Error saving cookies to file: {e}")
+
+        if req.cookie and req.cookie.return_cookies:
+            uc_cookies = await browser.cookies.get_all()
+            cookies = [c.to_json() for c in uc_cookies]
+
+        return True, html_content, cookies
+
+    except Exception as e:
+        logger.exception("other error")
+        return False, e, []
     finally:
         if browser:
             try:
