@@ -20,7 +20,7 @@
 ```
 
 
-- statud code error が出た場合は useragent を なし(null)にして再試行してみると通るサイトもある
+- status code error が出た場合は useragent を なし(null)にして再試行してみると通るサイトもある
 ```json
 {
   "url": "https://www.example.com",
