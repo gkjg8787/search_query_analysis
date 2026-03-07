@@ -124,8 +124,8 @@ async def download_html(request: DownloadRequest):
 
     success, result, cookies = await dl_with_nodriver(request)
 
+    log.info("Completed request for download", success=success)
     if success:
-        log.info("Completed request for download")
         return DownloadResponse(result=result, cookies=cookies)
     else:
         error_details = ErrorDetail(
