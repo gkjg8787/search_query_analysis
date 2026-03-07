@@ -114,9 +114,18 @@ async def generate_search_url(request: Request, req: GenerateSearchURLRequest):
 
 @app.post("/download", response_model=DownloadResponse)
 async def download_html(request: DownloadRequest):
+    structlog.contextvars.clear_contextvars()
+    structlog.contextvars.bind_contextvars(
+        router_path=request.url.path,
+        request_id=str(uuid.uuid4()),
+    )
+    log = structlog.get_logger(__name__)
+    log.info("Received request for download", req=request)
+
     success, result, cookies = await dl_with_nodriver(request)
 
     if success:
+        log.info("Completed request for download")
         return DownloadResponse(result=result, cookies=cookies)
     else:
         error_details = ErrorDetail(
