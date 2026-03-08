@@ -41,6 +41,7 @@ DEFAULT_WAIT_TIME = {
     "mouse_click": 0.5,
     "send_keys": 1,
     "after_stop": 1,
+    "text_clear": 0.5,
 }
 
 logger = structlog.get_logger(__name__)
@@ -618,6 +619,18 @@ async def get_search_query_result(req: SearchURLProbeRequest):
                 )
 
         search_keyword = req.search_word or "ポケモン"
+
+        try:
+            searchbox_text = await page.evaluate(
+                f"document.querySelector('{selector}').value"
+            )
+        except:
+            searchbox_text = None
+        if searchbox_text:
+            logger.info("searchbox_text delete", searchbox_text=searchbox_text)
+            await searchbox.apply("el => el.value = ''")
+            await asyncio.sleep(DEFAULT_WAIT_TIME["text_clear"])
+
         await searchbox.focus()
         await asyncio.sleep(DEFAULT_WAIT_TIME["focus"])
         await searchbox.send_keys(search_keyword)
