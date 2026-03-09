@@ -31,6 +31,7 @@ RUN uv venv /app/venv && . /app/venv/bin/activate && uv pip install -r requireme
 COPY fix_nodriver.sh /app/fix_nodriver.sh
 
 RUN chmod +x /app/fix_nodriver.sh && \
+    . /app/venv/bin/activate && \
     /app/fix_nodriver.sh
 
 ENV PATH=/app/venv/bin:$PATH
