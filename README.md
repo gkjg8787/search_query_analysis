@@ -1,7 +1,7 @@
 # search_query_analysis
 
 # 概要
-- 解析したい対象のサイト（検索ボックスが表示されている）のURLから検索を自動で行いURLの解析情報を出力するAPI
+- 解析したい対象のサイト（検索ボックスが表示されている）のURLからサイト内検索を自動で行いURLの解析情報を出力するAPI
 - [nodriver_api](https://github.com/gkjg8787/nodriver_api)と同様のAPI(download)も用意
 
 
