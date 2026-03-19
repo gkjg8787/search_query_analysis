@@ -2,30 +2,13 @@ import urllib.parse
 from typing import List, Dict, Optional
 import re
 import json
-
+import string
 
 from models import URLAnalysisModel, ParameterDetail
 
 
-def build_url(
-    analysis: URLAnalysisModel,
-    keyword: str,
-    category: str | None = None,
-    category_name: str = "category_name",
-) -> str:
-    params_config = analysis.parameters
-    url = analysis.url_template
-
-    # 1. Keyword の処理 (空でも None でも安全にエンコード)
-    kw_config = params_config.get("keyword")
-    processed_kw = urllib.parse.quote(
-        keyword or "", encoding=kw_config.encoding if kw_config else "utf-8"
-    )
-
-    # 2. Category の処理
-    ct_config = params_config.get("category")
+def _create_category_query(category, category_name, ct_config: ParameterDetail | None):
     processed_ct = None
-
     if category and ct_config:
         if ct_config.is_json:
             if ct_config.json_key_path == "$.*":
@@ -50,6 +33,29 @@ def build_url(
                     processed_ct = category
         else:
             processed_ct = category
+    return processed_ct
+
+
+def build_url(
+    analysis: URLAnalysisModel,
+    keyword: str,
+    category: str | None = None,
+    category_name: str = "category_name",
+) -> str:
+    params_config = analysis.parameters
+    url = analysis.url_template
+
+    # 1. Keyword の処理 (空でも None でも安全にエンコード)
+    kw_config = params_config.get("keyword")
+    processed_kw = urllib.parse.quote(
+        keyword or "", encoding=kw_config.encoding if kw_config else "utf-8"
+    )
+
+    # 2. Category の処理
+    ct_config = params_config.get("category")
+    processed_ct = _create_category_query(
+        category=category, category_name=category_name, ct_config=ct_config
+    )
 
     # 3. 置換の実行
     # ここでは `{category}` をそのままにし、値がある場合だけ埋める
@@ -63,6 +69,69 @@ def build_url(
     res_url = url.format(**format_data)
 
     # 4. 不要なパラメータのクリーンアップ (後処理)
+    if processed_ct is None:
+        if ct_config and ct_config.position == "query":
+            # マツキヨ型: key=REMOVEME を消す
+            key = ct_config.key
+            # ?key=REMOVEME& / &key=REMOVEME / ?key=REMOVEME のパターンに対応
+            res_url = re.sub(rf"{key}=REMOVEME&?", "", res_url)
+            res_url = re.sub(rf"&{key}=REMOVEME", "", res_url)
+        else:
+            # 楽天/ビックカメラ型: /REMOVEME/ を / に
+            res_url = res_url.replace("REMOVEME/", "").replace("REMOVEME", "")
+
+    # 5. 最終仕上げ (重複スラッシュや記号の掃除)
+    res_url = res_url.replace("?&", "?").replace("&&", "&").rstrip("&").rstrip("?")
+    res_url = re.sub(r"(?<!:)/{2,}", "/", res_url)
+
+    return res_url
+
+
+class PartialFormatter(string.Formatter):
+    def get_value(self, key, args, kwargs):
+        try:
+            # キーが存在すればその値を返す
+            return super().get_value(key, args, kwargs)
+        except KeyError:
+            # キーがない場合は、元の形式（例: {b}）をそのまま返す
+            return "{" + key + "}"
+
+
+def partial_template(
+    analysis: URLAnalysisModel,
+    keyword: str | None = None,
+    category: str | None = None,
+    category_name: str = "category_name",
+):
+    if keyword is None and category is None:
+        return analysis.url_template
+
+    params_config = analysis.parameters
+    url = analysis.url_template
+
+    kw_config = params_config.get("keyword")
+    if keyword is not None:
+        processed_kw = urllib.parse.quote(
+            keyword or "", encoding=kw_config.encoding if kw_config else "utf-8"
+        )
+        format_data = {"keyword": processed_kw}
+    else:
+        format_data = {}
+
+    ct_config = params_config.get("category")
+    processed_ct = _create_category_query(
+        category=category, category_name=category_name, ct_config=ct_config
+    )
+
+    if processed_ct is not None:
+        format_data["category"] = processed_ct
+    else:
+        format_data["category"] = "REMOVEME"  # 一旦マーカーを置く
+
+    # 置換実行
+    fmt = PartialFormatter()
+    res_url = fmt.format(url, **format_data)
+
     if processed_ct is None:
         if ct_config and ct_config.position == "query":
             # マツキヨ型: key=REMOVEME を消す

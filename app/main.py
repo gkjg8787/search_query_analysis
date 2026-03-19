@@ -12,6 +12,7 @@ from models import (
     ErrorDetail,
     GenerateSearchURLResponse,
     GenerateSearchURLRequest,
+    GenerateSearchURLTemplateRequest,
     SearchURLAnalysisRequest,
     SearchURLAnalysisResponse,
     DownloadResponse,
@@ -19,7 +20,7 @@ from models import (
 )
 from downloader import get_search_query_result, dl_with_nodriver
 from common.logger_config import configure_logger
-from url_analysis import build_url, URLPatternLogic
+import url_analysis
 
 configure_logger(filename="app.log", logging_level="INFO")
 logger = structlog.get_logger(__name__)
@@ -64,13 +65,13 @@ async def analyze_search_url(request: Request, req: SearchURLAnalysisRequest):
     )
     log = structlog.get_logger(__name__)
     log.info("Received request for search URL analysis", req=req)
-    url_analysis = URLPatternLogic(
+    url_info = url_analysis.URLPatternLogic(
         target_url=req.url,
         keyword=req.search_word,
         category_val=req.category_value,
     ).analyze()
-    log.info("Completed request for search URL analysis", url_analysis=url_analysis)
-    return SearchURLAnalysisResponse(url_info=url_analysis)
+    log.info("Completed request for search URL analysis", url_info=url_info)
+    return SearchURLAnalysisResponse(url_info=url_info)
 
 
 @app.post(
@@ -105,10 +106,33 @@ async def generate_search_url(request: Request, req: GenerateSearchURLRequest):
     log = structlog.get_logger(__name__)
     log.info("Received request for search URL generation", req=req)
 
-    url = build_url(
-        req.url_info, req.search_keyword, req.category_value, req.category_name
+    url = url_analysis.build_url(
+        analysis=req.url_info,
+        keyword=req.search_keyword,
+        category=req.category_value,
+        category_name=req.category_name,
     )
     log.info("Completed request for search URL generation", url=url)
+    return GenerateSearchURLResponse(url=url)
+
+
+@app.post("/searchurl/template/generate", response_model=GenerateSearchURLResponse)
+async def generate_search_url(request: Request, req: GenerateSearchURLTemplateRequest):
+    structlog.contextvars.clear_contextvars()
+    structlog.contextvars.bind_contextvars(
+        router_path=request.url.path,
+        request_id=str(uuid.uuid4()),
+    )
+    log = structlog.get_logger(__name__)
+    log.info("Received request for search URL template generation", req=req)
+
+    url = url_analysis.partial_template(
+        analysis=req.url_info,
+        keyword=req.search_keyword,
+        category=req.category_value,
+        category_name=req.category_name,
+    )
+    log.info("Completed request for search URL template generation", url=url)
     return GenerateSearchURLResponse(url=url)
 
 

@@ -161,6 +161,13 @@ class GenerateSearchURLRequest(BaseModel):
     category_name: Optional[str] = None
 
 
+class GenerateSearchURLTemplateRequest(BaseModel):
+    url_info: URLAnalysisModel
+    search_keyword: str | None = None
+    category_value: Optional[str] = None
+    category_name: Optional[str] = None
+
+
 class GenerateSearchURLResponse(BaseModel):
     url: str = Field(
         default="",
