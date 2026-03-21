@@ -1,6 +1,6 @@
-FROM python:3.14-slim-trixie
+FROM selenium/standalone-chromium:141.0
 
-RUN pip install uv
+USER root
 
 RUN apt-get update && \
     apt-get install -y tzdata
@@ -9,9 +9,9 @@ RUN ln -sf /usr/share/zoneinfo/Japan /etc/localtime && \
     echo $TZ > /etc/timezone
 
 
-RUN apt-get update && \
-   apt-get install -y \
-    sqlite3 procps curl chromium xvfb
+RUN pip install uv
+RUN apt-get install -y \
+    procps 
 RUN apt-get -y install locales && \
     localedef -f UTF-8 -i ja_JP ja_JP.UTF-8
 
@@ -28,11 +28,6 @@ COPY requirements.txt ./
 
 RUN uv venv /app/venv && . /app/venv/bin/activate && uv pip install -r requirements.txt
 
-COPY fix_nodriver.sh /app/fix_nodriver.sh
-
-RUN chmod +x /app/fix_nodriver.sh && \
-    . /app/venv/bin/activate && \
-    /app/fix_nodriver.sh
 
 ENV PATH=/app/venv/bin:$PATH
 
