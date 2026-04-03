@@ -146,13 +146,11 @@ async def download_html(request: Request, dreq: DownloadRequest):
     log = structlog.get_logger(__name__)
     log.info("Received request for download", req=dreq)
 
-    success, result, cookies = await dl_with_nodriver(dreq)
+    res = await dl_with_nodriver(dreq)
 
+    success = True
+    if res.error:
+        if res.error.error_msg or res.error.error_type:
+            success = False
     log.info("Completed request for download", success=success)
-    if success:
-        return DownloadResponse(result=result, cookies=cookies)
-    else:
-        error_details = ErrorDetail(
-            error_msg=str(result), error_type=type(result).__name__
-        )
-        return DownloadResponse(error=error_details)
+    return res

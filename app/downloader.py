@@ -10,6 +10,7 @@ import structlog
 from bs4 import BeautifulSoup
 
 from models import (
+    DownloadResponse,
     SearchURLProbeRequest,
     ErrorDetail,
     WaitCSSSelector,
@@ -19,8 +20,6 @@ from models import (
     DownloadRequest,
     Scroll,
     Wait,
-    NoStatusCode,
-    StatusCodeError,
 )
 from url_analysis import URLPatternLogic
 from parser import (
@@ -839,19 +838,38 @@ async def dl_with_nodriver(req: DownloadRequest):
                     await _wait_css_selector(page, req.wait_css_selector)
                 except Exception as e:
                     logger.error(f"Error waiting for CSS selector: {e}")
-                    return False, e, []
+                    return DownloadResponse(
+                        error=ErrorDetail(
+                            error_type=f"WaitCSSSelectorError: {type(e).__name__}",
+                            error_msg=str(e),
+                        ),
+                    )
             elif req.page_wait_time:
                 await asyncio.sleep(req.page_wait_time)
+            else:
+                logger.warning(
+                    "Neither wait_css_selector nor page_wait_time specified, using default wait time",
+                    wait_time=DEFAULT_WAIT_TIME["first_load"],
+                )
+                await asyncio.sleep(DEFAULT_WAIT_TIME["first_load"])
 
         if not history:
-            return (
-                False,
-                NoStatusCode("Failed to retrieve status code from the page"),
-                [],
-            )
+            if page.url == req.url:
+                return DownloadResponse(
+                    error=ErrorDetail(
+                        error_type="NoStatusCode",
+                        error_msg="Failed to retrieve status code from the page",
+                    )
+                )
+            else:
+                logger.info(
+                    "Redirected, Cannot monitor status codes",
+                    page_url=page.url,
+                    req_url=req.url,
+                )
 
         # 最終status_code
-        if history[-1].get("status"):
+        if history and history[-1].get("status"):
             try:
                 latest_status = int(history[-1]["status"])
             except:
@@ -865,13 +883,13 @@ async def dl_with_nodriver(req: DownloadRequest):
                     status_code_history=history,
                     latest_status=latest_status,
                 )
-                return (
-                    False,
-                    StatusCodeError(
-                        f"Status code error: {history[-1]}",
-                    ),
-                    [],
+                return DownloadResponse(
+                    error=ErrorDetail(
+                        error_type="StatusCodeError",
+                        error_msg=f"Status code error: {history[-1]}",
+                    )
                 )
+
         else:
             logger.warning("No status code", status_code_history=history)
 
@@ -889,12 +907,22 @@ async def dl_with_nodriver(req: DownloadRequest):
         if req.cookie and req.cookie.return_cookies:
             uc_cookies = await browser.cookies.get_all()
             cookies = [c.to_json() for c in uc_cookies]
-
-        return True, html_content, cookies
+        res = DownloadResponse(
+            result=html_content,
+            cookies=cookies,
+        )
+        if page.url != req.url:
+            res.redirect_url = page.url
+        return res
 
     except Exception as e:
         logger.exception("other error")
-        return False, e, []
+        return DownloadResponse(
+            error=ErrorDetail(
+                error_type=type(e).__name__,
+                error_msg=str(e),
+            )
+        )
     finally:
         if browser:
             try:

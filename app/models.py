@@ -58,6 +58,7 @@ class DownloadResponse(BaseModel):
     result: str = ""
     cookies: list[dict[str, Any]] = []
     error: ErrorDetail = ErrorDetail()
+    redirect_url: str | None = None
 
 
 class SearchBoxInfo(BaseModel):
