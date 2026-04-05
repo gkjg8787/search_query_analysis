@@ -838,12 +838,15 @@ async def dl_with_nodriver(req: DownloadRequest):
                     await _wait_css_selector(page, req.wait_css_selector)
                 except Exception as e:
                     logger.error(f"Error waiting for CSS selector: {e}")
-                    return DownloadResponse(
+                    res = DownloadResponse(
                         error=ErrorDetail(
                             error_type=f"WaitCSSSelectorError: {type(e).__name__}",
                             error_msg=str(e),
                         ),
                     )
+                    if page.url != req.url:
+                        res.redirect_url = page.url
+                    return res
             elif req.page_wait_time:
                 await asyncio.sleep(req.page_wait_time)
             else:
@@ -883,12 +886,15 @@ async def dl_with_nodriver(req: DownloadRequest):
                     status_code_history=history,
                     latest_status=latest_status,
                 )
-                return DownloadResponse(
+                res = DownloadResponse(
                     error=ErrorDetail(
                         error_type="StatusCodeError",
                         error_msg=f"Status code error: {history[-1]}",
                     )
                 )
+                if page.url != req.url:
+                    res.redirect_url = page.url
+                return res
 
         else:
             logger.warning("No status code", status_code_history=history)
@@ -917,12 +923,15 @@ async def dl_with_nodriver(req: DownloadRequest):
 
     except Exception as e:
         logger.exception("other error")
-        return DownloadResponse(
+        res = DownloadResponse(
             error=ErrorDetail(
                 error_type=type(e).__name__,
                 error_msg=str(e),
             )
         )
+        if page and page.url and page.url != req.url:
+            res.redirect_url = page.url
+        return res
     finally:
         if browser:
             try:
