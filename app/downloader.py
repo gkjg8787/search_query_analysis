@@ -235,10 +235,13 @@ async def status_monitor_list(tab, url, exact_match=True):
 
     tab.add_handler(uc.cdp.network.ResponseReceived, handler)
 
+    await tab.send(uc.cdp.network.enable())
+
     try:
         # 呼び出し側にはリストの参照を渡す
         yield history
     finally:
+        await tab.send(uc.cdp.network.disable())
         # 必ずハンドラーを解除
         tab.remove_handler(uc.cdp.network.ResponseReceived, handler)
 
@@ -271,14 +274,12 @@ async def find_visible_ancestor_nodriver(element):
     curr = element
     while curr:
         # 現在の要素が実際に表示されているかJSで判定
-        is_visible = await element.evaluate(
-            """
+        is_visible = await element.evaluate("""
             (el) => {
                 const style = window.getComputedStyle(el);
                 return style.display !== 'none' && style.visibility !== 'hidden';
             }
-        """
-        )
+        """)
 
         if is_visible:
             return curr
@@ -822,11 +823,9 @@ async def dl_with_nodriver(req: DownloadRequest):
                     continue
                 elif isinstance(action, Scroll):
                     if action.to_bottom:
-                        await page.evaluate(
-                            """() => {
+                        await page.evaluate("""() => {
                                 window.scrollTo(0, document.body.scrollHeight);
-                            }"""
-                        )
+                            }""")
                     elif action.amount:
                         await page.scroll_down(action.amount)
                     if action.pause_time and action.pause_time > 0:

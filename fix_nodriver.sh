@@ -20,6 +20,11 @@ version_le() {
 
 echo "Detected nodriver version: $CURRENT_VER"
 
+if [ -f "$NETWORK_FILE" ]; then
+    echo " - Fixing non-UTF-8 characters in network.py"
+    LC_ALL=C sed -i 's/\xb1/ /g' "$NETWORK_FILE"
+fi
+
 if version_le "$CURRENT_VER" "$FIX_REQUIRED_MAX"; then
     echo "Applying patches for Python 3.14 and Chrome 146+ compatibility..."
 
@@ -28,8 +33,6 @@ if version_le "$CURRENT_VER" "$FIX_REQUIRED_MAX"; then
 
     # B. network.py の非UTF-8文字 (±記号等) を除去
     if [ -f "$NETWORK_FILE" ]; then
-        echo " - Fixing non-UTF-8 characters in network.py"
-        LC_ALL=C sed -i 's/\xb1/ /g' "$NETWORK_FILE"
 
         # --- 追加: Chrome 146+ KeyError 対策 ---
         echo " - Fixing KeyError: 'privateNetworkRequestPolicy' and 'sameParty' in network.py"
