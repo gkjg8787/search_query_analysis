@@ -485,6 +485,14 @@ async def _select_category(page, category_data: SelectData):
             return False, selected_category
 
 
+async def get_current_url(page):
+    try:
+        return await page.evaluate("window.location.href")
+    except Exception as e:
+        logger.warning(f"Failed to get current URL: {e}")
+        return None
+
+
 async def get_search_query_result(req: SearchURLProbeRequest):
     logger.debug(f"input_params : {req.model_dump()}")
     browser = None
@@ -679,9 +687,7 @@ async def get_search_query_result(req: SearchURLProbeRequest):
 
         await asyncio.sleep(DEFAULT_WAIT_TIME["after_search"])
 
-        search_content = await page.get_content()
-
-        after_search_url = page.url
+        after_search_url = await get_current_url(page)
         category_val = ""
         if category_selected_ok and selected_category["value"]:
             category_val = selected_category["value"]
@@ -843,8 +849,9 @@ async def dl_with_nodriver(req: DownloadRequest):
                             error_msg=str(e),
                         ),
                     )
-                    if page.url != req.url:
-                        res.redirect_url = page.url
+                    current_url = await get_current_url(page)
+                    if current_url != req.url:
+                        res.redirect_url = current_url
                     return res
             elif req.page_wait_time:
                 await asyncio.sleep(req.page_wait_time)
@@ -856,7 +863,8 @@ async def dl_with_nodriver(req: DownloadRequest):
                 await asyncio.sleep(DEFAULT_WAIT_TIME["first_load"])
 
         if not history:
-            if page.url == req.url:
+            current_url = await get_current_url(page)
+            if current_url == req.url:
                 return DownloadResponse(
                     error=ErrorDetail(
                         error_type="NoStatusCode",
@@ -866,7 +874,7 @@ async def dl_with_nodriver(req: DownloadRequest):
             else:
                 logger.info(
                     "Redirected, Cannot monitor status codes",
-                    page_url=page.url,
+                    page_url=await get_current_url(page),
                     req_url=req.url,
                 )
 
@@ -891,8 +899,9 @@ async def dl_with_nodriver(req: DownloadRequest):
                         error_msg=f"Status code error: {history[-1]}",
                     )
                 )
-                if page.url != req.url:
-                    res.redirect_url = page.url
+                current_url = await get_current_url(page)
+                if current_url and current_url != req.url:
+                    res.redirect_url = current_url
                 return res
 
         else:
@@ -916,8 +925,9 @@ async def dl_with_nodriver(req: DownloadRequest):
             result=html_content,
             cookies=cookies,
         )
-        if page.url != req.url:
-            res.redirect_url = page.url
+        current_url = await get_current_url(page)
+        if current_url and current_url != req.url:
+            res.redirect_url = current_url
         return res
 
     except Exception as e:
@@ -928,8 +938,9 @@ async def dl_with_nodriver(req: DownloadRequest):
                 error_msg=str(e),
             )
         )
-        if page and page.url and page.url != req.url:
-            res.redirect_url = page.url
+        current_url = await get_current_url(page)
+        if page and current_url and current_url != req.url:
+            res.redirect_url = current_url
         return res
     finally:
         if browser:
