@@ -403,7 +403,7 @@ async def extract_search_input_text(
         if score > 30:
             input_candidates.append((score, tag))
 
-        return finalize(input_candidates, soup)
+    return finalize(input_candidates, soup)
 
 
 async def extract_search_elements(html_content: str) -> dict[str, list[str]]:

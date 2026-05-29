@@ -498,6 +498,7 @@ async def click_search_button(page, search_button_list, target_selector):
     search_button_list = await extract_search_button(
         html_content, search_input_selector=target_selector
     )
+    soup = BeautifulSoup(html_content, "lxml") if html_content else None
 
     for btn_selector in search_button_list:
         try:
@@ -509,7 +510,7 @@ async def click_search_button(page, search_button_list, target_selector):
             break
         except Exception as e:
             logger.warning(
-                f"Failed to click search button",
+                f"Failed to click search button with original selector",
                 btn_selector=btn_selector,
                 search_btn_type=(
                     type(search_btn).__name__ if "search_btn" in locals() else "N/A"
@@ -517,9 +518,74 @@ async def click_search_button(page, search_button_list, target_selector):
                 target_selector=target_selector,
                 error=str(e),
             )
+
+            # --- フォールバックアルゴリズムの開始 ---
+            fallback_success = False
+
+            if soup:
+                # 1. CSSセレクタの文字列を「 > 」で分割して配列化
+                # （「 > 」の前後の空白を考慮してスプリット）
+                selector_parts = [part.strip() for part in btn_selector.split(">")]
+
+                # 末尾（一番下）から順に親へと要素を増やしながら検証するループ
+                # 例: parts[-1:] (a.link) -> parts[-2:] (div.container > a.link) -> ...
+                for i in range(1, len(selector_parts) + 1):
+                    # 下からi個分のパーツを切り出して「 > 」で再結合
+                    sub_selector = " > ".join(selector_parts[-i:])
+
+                    try:
+                        # BeautifulSoupで一意の要素として特定できるかチェック
+                        matched_elements = soup.select(sub_selector)
+
+                        if len(matched_elements) == 1:
+                            logger.info(
+                                f"Found unique fallback selector",
+                                original=btn_selector,
+                                fallback=sub_selector,
+                                depth=i,
+                            )
+
+                            # 一意の要素が見つかったら、それを使って再試行
+                            search_btn = await page.select(sub_selector)
+                            await search_btn.mouse_click()
+
+                            logger.info(
+                                f"Clicked search button successfully via fallback",
+                                btn_selector=sub_selector,
+                            )
+                            fallback_success = True
+                            break  # 内側のフォールバックループを抜ける
+
+                        elif len(matched_elements) > 1:
+                            # 複数マッチした場合は、さらに上の階層が必要なので continue
+                            logger.debug(
+                                f"Selector matches multiple elements, climbing up...",
+                                selector=sub_selector,
+                                count=len(matched_elements),
+                            )
+                        else:
+                            # 0件の場合も、動的クラス名変化等の可能性があるため、上の階層を含めて再検証
+                            logger.debug(
+                                f"Selector matches no elements, climbing up...",
+                                selector=sub_selector,
+                            )
+
+                    except Exception as fb_err:
+                        logger.debug(
+                            f"Error evaluating selector in BeautifulSoup",
+                            selector=sub_selector,
+                            error=str(fb_err),
+                        )
+                        continue
+
+            if fallback_success:
+                break  # 元の search_button_list のループを抜け、処理成功とする
+            # --- フォールバックアルゴリズムの終了 ---
+
+            # フォールバックもすべて失敗した場合、またはsoupが取得できなかった場合の既存エラー処理
             if btn_selector == search_button_list[-1]:
                 logger.exception(
-                    f"Failed to find or interact with any of the search buttons: {search_button_list}"
+                    f"Failed to find or interact with any of the search buttons (including fallback): {search_button_list}"
                 )
                 return False, SearchURLProbeResponse(
                     error=ErrorDetail(
