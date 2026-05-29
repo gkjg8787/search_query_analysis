@@ -29,6 +29,7 @@ from parser import (
     SelectData,
     _generate_css_selector,
     find_first_visible_ancestor,
+    _analyze_visibility,
 )
 from common.read_config import get_base_dir
 
@@ -493,6 +494,27 @@ async def get_current_url(page):
         return None
 
 
+async def check_dynamic_search_button(
+    page, searchboxinfo: SearchBoxInfo, old_html_content: str
+):
+    old_soup = BeautifulSoup(old_html_content, "lxml")
+    need_analyze = False
+    for btn_selector in searchboxinfo.search_button_list:
+        analyze_dict = _analyze_visibility(old_soup.select_one(btn_selector))
+        if analyze_dict["is_hidden"] and analyze_dict["is_dynamic"]:
+            need_analyze = True
+            break
+    if not need_analyze:
+        return searchboxinfo
+    logger.info("Further analysis is needed")
+    content = await page.get_content()
+    ret = await extract_search_elements(content)
+    return SearchBoxInfo(
+        search_input_list=ret["search_input_list"],
+        search_button_list=ret["search_button_list"],
+    )
+
+
 async def get_search_query_result(req: SearchURLProbeRequest):
     logger.debug(f"input_params : {req.model_dump()}")
     browser = None
@@ -658,6 +680,10 @@ async def get_search_query_result(req: SearchURLProbeRequest):
             category_selected_ok, selected_category = await _select_category(
                 page, category_data
             )
+
+        searchboxinfo = await check_dynamic_search_button(
+            page, searchboxinfo, html_content
+        )
 
         for btn_selector in searchboxinfo.search_button_list:
             try:

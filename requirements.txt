@@ -1,6 +1,6 @@
-fastapi
+fastapi>=0.136.1, <1.0
 uvicorn[standard]
-nodriver
+nodriver==0.50.3
 structlog
 bs4
 lxml

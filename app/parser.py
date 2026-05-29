@@ -138,7 +138,219 @@ def extract_select_options(html_content: str) -> list[SelectData]:
     return results
 
 
-async def extract_search_elements(html_content: str) -> dict[str, list[str]]:
+async def extract_search_button(html_content: str, search_input_selector: str = ""):
+    soup = BeautifulSoup(html_content, "lxml")
+
+    # ==========================================================
+    # 【修正・最適化】入力欄セレクタがある場合の周辺要素ピンポイント探索
+    # ==========================================================
+    if search_input_selector:
+        try:
+            target_input = soup.select_one(search_input_selector)
+        except Exception:
+            target_input = None
+
+        if target_input:
+            proximity_candidates = []
+
+            # 探索範囲: 入力欄の親、および「親の親（formや共通divなど）」の配下
+            lookup_parents = []
+            p = target_input.parent
+            if p:
+                lookup_parents.append(p)
+                if p.parent:
+                    lookup_parents.append(p.parent)
+                    # 楽天のようにformの外にハミ出しているケースを考慮し、もう1階層上までカバー
+                    if p.parent.parent:
+                        lookup_parents.append(p.parent.parent)
+
+            # 周辺の特定のタグだけを収集
+            local_elements = []
+            for parent_node in lookup_parents:
+                for t in parent_node.find_all(
+                    ["a", "button", "input", "div", "svg"], recursive=True
+                ):
+                    if t != target_input and t not in local_elements:
+                        local_elements.append(t)
+
+            for tag in local_elements:
+                score = 0
+                name = tag.name.lower()
+
+                # クラス名や属性の取得
+                def get_attr_str_local(t, attr_name):
+                    val = t.attrs.get(attr_name, "")
+                    return " ".join(val) if isinstance(val, list) else str(val)
+
+                attr_all = (
+                    get_attr_str_local(tag, "id")
+                    + " "
+                    + get_attr_str_local(tag, "class")
+                    + " "
+                    + get_attr_str_local(tag, "name")
+                )
+                attr_all_lower = attr_all.lower()
+
+                # --------------------------------------------------
+                # 強力な除外フィルタ（クリアボタン、サジェスト、履歴の排除）
+                # --------------------------------------------------
+                # 文字列、属性、IDなどからノイズ要素を徹底排除
+                text_val = tag.get_text(" ", strip=True).lower()
+                aria_val = get_attr_str_local(tag, "aria-label").lower()
+                alt_val = get_attr_str_local(tag, "alt").lower()
+                combined_text = text_val + " " + aria_val + " " + alt_val
+
+                # テキスト消去ボタン、サジェスト、履歴、非表示要素は即除外(スコアをマイナスに)
+                if re.search(
+                    r"(clear|iss-attach|history|suggest|popup|dialog|hidden|close|×|消去|クリア)",
+                    attr_all_lower + " " + combined_text,
+                ):
+                    continue
+
+                # --------------------------------------------------
+                # スコアリング（キーワード・属性による判定）
+                # --------------------------------------------------
+                # 1. 検索専用の強力なキーワード (最優先)
+                if re.search(
+                    r"(js_keywordsearchbtn|srcbtn|submit|search_btn|search_icon|search-button)",
+                    attr_all_lower,
+                ):
+                    score += 70
+                # 汎用的な検索キーワード
+                elif re.search(r"(search|src|btn|button|find)", attr_all_lower):
+                    score += 35
+
+                # 2. タグの種類と属性
+                if name == "input" and tag.attrs.get("type", "").lower() in [
+                    "submit",
+                    "image",
+                ]:
+                    score += 50
+                elif name == "button":
+                    score += 45
+                elif name == "a":
+                    score += 30
+
+                # 3. テキストやaria-label、alt（「検索」の文字や虫眼鏡）
+                if any(k in combined_text for k in ["search", "検索", "探す"]):
+                    score += 40
+
+                # 4. 構造的トポロジー（親要素の共有度合い）
+                input_parent = target_input.parent
+                tag_parent = tag.parent
+
+                if input_parent == tag_parent:
+                    score += 30  # 完全に同じ直近の親
+                elif target_input.find_parent("form") and target_input.find_parent(
+                    "form"
+                ) == tag.find_parent("form"):
+                    score += 25  # 同じform内
+
+                # 子要素にボタンを持つdivは、div自身ではなく中身が正解なので減点
+                if name == "div" and tag.find(["button", "input", "a"]):
+                    score -= 30
+
+                # 最低限、検索ボタンとしてのシグナル（キーワード等）があるものだけを対象にする
+                if score > 40:
+                    proximity_candidates.append((score, tag))
+
+            if proximity_candidates:
+                return finalize(proximity_candidates, soup)
+
+    # ==========================================================
+    # 【既存ロジック】入力欄がない、または見つからない場合のフォールバック（全件走査）
+    # ==========================================================
+    def get_attr_str(tag, attr_name):
+        val = tag.attrs.get(attr_name, "")
+        return " ".join(val).lower() if isinstance(val, list) else str(val).lower()
+
+    elements = soup.find_all(["input", "button", "a", "div", "svg"])
+    button_candidates = []
+
+    for tag in elements:
+        score = 0
+        name = tag.name.lower()
+        attr_all = (
+            get_attr_str(tag, "id")
+            + " "
+            + get_attr_str(tag, "class")
+            + " "
+            + get_attr_str(tag, "name")
+        )
+
+        if re.search(
+            r"(js_keywordsearchbtn|srcbtn|submit|search_btn|search_icon|search-button)",
+            attr_all,
+        ):
+            score += 70
+
+        if name == "input" and tag.attrs.get("type", "").lower() in [
+            "submit",
+            "image",
+        ]:
+            score += 40
+        elif name == "button":
+            score += 35
+
+        text_val = tag.get_text(" ", strip=True).lower()
+        aria_val = get_attr_str(tag, "aria-label")
+        alt_val = get_attr_str(tag, "alt")
+        if any(
+            k in (text_val + aria_val + alt_val) for k in ["search", "検索", "探す"]
+        ):
+            score += 40
+
+        curr = tag.parent
+        depth = 0
+        is_in_header = False
+        is_in_excluded_area = False
+        while curr and depth < 5:
+            p_attr = (
+                get_attr_str(curr, "id") + " " + get_attr_str(curr, "class")
+            ).lower()
+            if "header" in curr.name or "header" in p_attr:
+                is_in_header = True
+            if any(k in p_attr for k in ["sidebar", "side-nav", "modal", "filter"]):
+                is_in_excluded_area = True
+                break
+            curr = curr.parent
+            depth += 1
+
+        if is_in_header:
+            score += 30
+        if is_in_excluded_area:
+            score -= 50
+        if name == "div" and tag.find(["button", "input"]):
+            score -= 30
+        if tag.find_parent("form"):
+            score += 20
+
+        if score > 30:
+            button_candidates.append((score, tag))
+
+    return finalize(button_candidates, soup)
+
+
+def finalize(candidates, soup, limit=5):
+    candidates.sort(key=lambda x: x[0], reverse=True)
+    unique_sels = []
+    seen = set()
+    for _, tag in candidates:
+        try:
+            sel = _generate_css_selector(tag, soup)
+            if sel and sel not in seen:
+                seen.add(sel)
+                unique_sels.append(sel)
+            if len(unique_sels) >= limit:
+                break
+        except:
+            continue
+    return unique_sels
+
+
+async def extract_search_input_text(
+    html_content: str,
+):
     soup = BeautifulSoup(html_content, "lxml")
 
     def get_attr_str(tag, attr_name):
@@ -191,93 +403,22 @@ async def extract_search_elements(html_content: str) -> dict[str, list[str]]:
         if score > 30:
             input_candidates.append((score, tag))
 
-    # --- Search Button Candidates ---
-    # a, div も含めるが、まずは button/input[type=submit] を厚遇
-    elements = soup.find_all(["input", "button", "a", "div", "svg"])
-    button_candidates = []
+        return finalize(input_candidates, soup)
 
-    for tag in elements:
-        score = 0
-        name = tag.name.lower()
-        attr_all = (
-            get_attr_str(tag, "id")
-            + " "
-            + get_attr_str(tag, "class")
-            + " "
-            + get_attr_str(tag, "name")
-        )
 
-        # 1. ヨドバシ: #js_keywordSearchBtn, #srcBtn / マツキヨ: #xxx_submit
-        if re.search(
-            r"(js_keywordsearchbtn|srcbtn|submit|search_btn|search_icon|search-button)",
-            attr_all,
-        ):
-            score += 70
+async def extract_search_elements(html_content: str) -> dict[str, list[str]]:
 
-        # 2. タグ種別加点
-        if name == "input" and tag.attrs.get("type", "").lower() in ["submit", "image"]:
-            score += 40
-        elif name == "button":
-            score += 35
+    input_candidates = await extract_search_input_text(html_content)
 
-        # 3. 視覚的シグナル (SVGアイコン、aria-label、テキスト)
-        text_val = tag.get_text(" ", strip=True).lower()
-        aria_val = get_attr_str(tag, "aria-label")
-        alt_val = get_attr_str(tag, "alt")
-        if any(
-            k in (text_val + aria_val + alt_val) for k in ["search", "検索", "探す"]
-        ):
-            score += 40
+    if input_candidates:
+        search_input_selector = input_candidates[0]
+    else:
+        search_input_selector = ""
 
-        # 4. 構造的制約 (楽天の「ボタンの中のdiv」等を救済)
-        parent_text = ""
-        curr = tag.parent
-        # 親要素を遡ってコンテキストを確認
-        depth = 0
-        while curr and depth < 5:
-            p_attr = (
-                get_attr_str(curr, "id") + " " + get_attr_str(curr, "class")
-            ).lower()
-            if "header" in curr.name or "header" in p_attr:
-                score += 30  # ヘッダー内なら大幅加点
-                break
-            if any(k in p_attr for k in ["sidebar", "side-nav", "modal", "filter"]):
-                score -= 50  # サイドバーやフィルタ、モーダル内は大幅減点
-                break
-            curr = curr.parent
-            depth += 1
-        # 「自分の中にボタンが含まれているdiv」は、自分ではなく中身が正解なので減点
-        if name == "div" and tag.find(["button", "input"]):
-            score -= 30
-
-        # 5. フォーム内ボーナス
-        if tag.find_parent("form"):
-            score += 20
-
-        if score > 30:
-            button_candidates.append((score, tag))
-
-    # --- 最終選別ロジック ---
-    def finalize(candidates, limit=5):  # 順位が重要なため少し多めに保持
-        candidates.sort(key=lambda x: x[0], reverse=True)
-        unique_sels = []
-        seen = set()
-        for _, tag in candidates:
-            try:
-                sel = _generate_css_selector(tag, soup)
-                if sel and sel not in seen:
-                    # ヨドバシのように酷似したパスが出る場合、短いID優先
-                    seen.add(sel)
-                    unique_sels.append(sel)
-                if len(unique_sels) >= limit:
-                    break
-            except:
-                continue
-        return unique_sels
-
+    button_candidates = await extract_search_button(html_content, search_input_selector)
     return {
-        "search_input_list": finalize(input_candidates),
-        "search_button_list": finalize(button_candidates),
+        "search_input_list": input_candidates,
+        "search_button_list": button_candidates,
     }
 
 
