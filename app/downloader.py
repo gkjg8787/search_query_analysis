@@ -15,7 +15,6 @@ from models import (
     ErrorDetail,
     WaitCSSSelector,
     SearchURLProbeResponse,
-    SearchBoxInfo,
     CustomSelectData,
     DownloadRequest,
     Scroll,
@@ -23,13 +22,13 @@ from models import (
 )
 from url_analysis import URLPatternLogic
 from parser import (
-    extract_search_elements,
+    extract_search_input_text,
+    extract_search_button,
     check_category,
     find_custom_select_candidates,
     SelectData,
     _generate_css_selector,
     find_first_visible_ancestor,
-    _analyze_visibility,
 )
 from common.read_config import get_base_dir
 
@@ -494,25 +493,42 @@ async def get_current_url(page):
         return None
 
 
-async def check_dynamic_search_button(
-    page, searchboxinfo: SearchBoxInfo, old_html_content: str
-):
-    old_soup = BeautifulSoup(old_html_content, "lxml")
-    need_analyze = False
-    for btn_selector in searchboxinfo.search_button_list:
-        analyze_dict = _analyze_visibility(old_soup.select_one(btn_selector))
-        if analyze_dict["is_hidden"] and analyze_dict["is_dynamic"]:
-            need_analyze = True
-            break
-    if not need_analyze:
-        return searchboxinfo
-    logger.info("Further analysis is needed")
-    content = await page.get_content()
-    ret = await extract_search_elements(content)
-    return SearchBoxInfo(
-        search_input_list=ret["search_input_list"],
-        search_button_list=ret["search_button_list"],
+async def click_search_button(page, search_button_list, target_selector):
+    html_content = await page.get_content()
+    search_button_list = await extract_search_button(
+        html_content, search_input_selector=target_selector
     )
+
+    for btn_selector in search_button_list:
+        try:
+            search_btn = await page.select(btn_selector)
+            await search_btn.mouse_click()
+            logger.info(
+                f"Clicked search button successfully", btn_selector=btn_selector
+            )
+            break
+        except Exception as e:
+            logger.warning(
+                f"Failed to click search button",
+                btn_selector=btn_selector,
+                search_btn_type=(
+                    type(search_btn).__name__ if "search_btn" in locals() else "N/A"
+                ),
+                target_selector=target_selector,
+                error=str(e),
+            )
+            if btn_selector == search_button_list[-1]:
+                logger.exception(
+                    f"Failed to find or interact with any of the search buttons: {search_button_list}"
+                )
+                return False, SearchURLProbeResponse(
+                    error=ErrorDetail(
+                        error_type=f"SearchButtonInteractionError: {type(e).__name__}",
+                        error_msg=f"Failed to find or interact with search button: {e}",
+                    )
+                )
+            continue
+    return True, None
 
 
 async def get_search_query_result(req: SearchURLProbeRequest):
@@ -605,46 +621,44 @@ async def get_search_query_result(req: SearchURLProbeRequest):
             except Exception as e:
                 logger.exception(f"Error saving cookies to file: {e}")
 
-        ret = await extract_search_elements(html_content)
-        searchboxinfo = SearchBoxInfo(
-            search_input_list=ret["search_input_list"],
-            search_button_list=ret["search_button_list"],
-        )
+        search_input_list = await extract_search_input_text(html_content)
+
         category_ok, category_data = await check_category(html_content)
         logger.info(
             f"Information extraction from HTML completed",
             category_return=category_ok,
             category_data=category_data,
-            generate_searchbox_info_result=searchboxinfo.model_dump(),
+            search_input_list=search_input_list,
         )
 
-        if not searchboxinfo.search_input_list or not searchboxinfo.search_button_list:
+        if not search_input_list:
             return (
                 False,
                 SearchURLProbeResponse(
                     error=ErrorDetail(
-                        error_type="SearchBoxInfoError",
-                        error_msg="Failed to extract search box information from the page",
+                        error_type="search_input_not_found",
+                        error_msg="Failed to extract search input list from the page",
                     )
                 ),
             )
 
         # start search and get url
-
-        for selector in searchboxinfo.search_input_list:
+        target_selector = None
+        for selector in search_input_list:
             try:
                 searchbox = await page.select(selector)
+                target_selector = selector
                 break
             except Exception as e:
                 logger.warning(
-                    f"Failed to find search box with selector '{selector}': {e}"
+                    f"Failed to find search input list with selector '{selector}': {e}"
                 )
 
-            if selector == searchboxinfo.search_input_list[-1]:
+            if selector == search_input_list[-1]:
                 return False, SearchURLProbeResponse(
                     error=ErrorDetail(
-                        error_type=f"SearchBoxInteractionError: {type(e).__name__}",
-                        error_msg=f"Failed to find or interact with search box: {e}",
+                        error_type=f"SearchInputInteractionError: {type(e).__name__}",
+                        error_msg=f"Failed to find or interact with search input: {e}",
                     )
                 )
 
@@ -652,7 +666,7 @@ async def get_search_query_result(req: SearchURLProbeRequest):
 
         try:
             searchbox_text = await page.evaluate(
-                f"document.querySelector('{selector}').value"
+                f"document.querySelector('{target_selector}').value"
             )
         except:
             searchbox_text = None
@@ -681,35 +695,11 @@ async def get_search_query_result(req: SearchURLProbeRequest):
                 page, category_data
             )
 
-        searchboxinfo = await check_dynamic_search_button(
-            page, searchboxinfo, html_content
+        ok, click_result = await click_search_button(
+            page, search_input_list, target_selector
         )
-
-        for btn_selector in searchboxinfo.search_button_list:
-            try:
-                search_btn = await page.select(btn_selector)
-                await search_btn.mouse_click()
-                logger.info(
-                    f"Clicked search button successfully", btn_selector=btn_selector
-                )
-                break
-            except Exception as e:
-                logger.warning(
-                    f"Failed to click search button",
-                    btn_selector=btn_selector,
-                    error=str(e),
-                )
-                if btn_selector == searchboxinfo.search_button_list[-1]:
-                    logger.exception(
-                        f"Failed to find or interact with any of the search buttons: {searchboxinfo.search_button_list}"
-                    )
-                    return False, SearchURLProbeResponse(
-                        error=ErrorDetail(
-                            error_type=f"SearchButtonInteractionError: {type(e).__name__}",
-                            error_msg=f"Failed to find or interact with search button: {e}",
-                        )
-                    )
-                continue
+        if not ok:
+            return False, click_result
 
         await asyncio.sleep(DEFAULT_WAIT_TIME["after_search"])
 
