@@ -91,7 +91,10 @@ async def get_browser_version():
             logger.exception(f"Error reading Chrome version from file: {e}")
 
     try:
-        browser = await uc.start(sandbox=False)
+        browser = await uc.start(
+            sandbox=False,
+            browser_executable_path="/root/.cache/ms-playwright/chromium-1223/chrome-linux64/chrome",
+        )
         page = await browser.get("about:blank")
         # JavaScriptを実行してUser Agentを取得
         user_agent = await page.evaluate("navigator.userAgent")
@@ -143,7 +146,11 @@ async def _get_browser_with_ua(useragent):
         "--start-maximized",
     ]
     if not useragent:
-        return await uc.start(browser_args=browser_args, sandbox=False)
+        return await uc.start(
+            browser_args=browser_args,
+            sandbox=False,
+            browser_executable_path="/root/.cache/ms-playwright/chromium-1223/chrome-linux64/chrome",
+        )
     chrome_major_version = await get_browser_version()
     if not chrome_major_version:
         chrome_major_version = useragent.major
@@ -154,7 +161,11 @@ async def _get_browser_with_ua(useragent):
         f"Chrome/{chrome_major_version}.0.0.0 Safari/537.36"
     )
     browser_args.append(f"--user-agent={ua_template}")
-    return await uc.start(browser_args=browser_args, sandbox=False)
+    return await uc.start(
+        browser_args=browser_args,
+        sandbox=False,
+        browser_executable_path="/root/.cache/ms-playwright/chromium-1223/chrome-linux64/chrome",
+    )
 
 
 async def _get_page_with_ua(browser, useragent):

@@ -11,7 +11,7 @@ RUN ln -sf /usr/share/zoneinfo/Japan /etc/localtime && \
 
 RUN apt-get update && \
    apt-get install -y \
-    sqlite3 procps curl chromium xvfb
+    sqlite3 procps curl xvfb
 RUN apt-get -y install locales && \
     localedef -f UTF-8 -i ja_JP ja_JP.UTF-8
 
@@ -26,7 +26,10 @@ RUN mkdir /app/db && mkdir /app/log && mkdir /app/cookie
 
 COPY requirements.txt ./
 
-RUN uv venv /app/venv && . /app/venv/bin/activate && uv pip install -r requirements.txt
+RUN uv venv /app/venv && . /app/venv/bin/activate && \
+    uv pip install playwright==1.60 && \
+    playwright install --with-deps chromium && \
+    uv pip install -r requirements.txt
 
 COPY fix_nodriver.sh /app/fix_nodriver.sh
 
