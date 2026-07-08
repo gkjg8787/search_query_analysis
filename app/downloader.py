@@ -45,6 +45,22 @@ DEFAULT_WAIT_TIME = {
 
 logger = structlog.get_logger(__name__)
 chrome_version_fpath = get_base_dir() / "temp" / "chrome_version.txt"
+default_arg_for_uc_start = {
+    "sandbox": False,
+}
+try:
+    from playwright.sync_api import sync_playwright
+
+    with sync_playwright() as p:
+        chromium = p.chromium
+        path = chromium.executable_path
+
+        import os
+
+        if os.path.exists(path):
+            default_arg_for_uc_start["browser_executable_path"] = path
+except Exception as e:
+    pass
 
 
 async def _cookie_to_param(
@@ -91,10 +107,7 @@ async def get_browser_version():
             logger.exception(f"Error reading Chrome version from file: {e}")
 
     try:
-        browser = await uc.start(
-            sandbox=False,
-            browser_executable_path="/root/.cache/ms-playwright/chromium-1223/chrome-linux64/chrome",
-        )
+        browser = await uc.start(**default_arg_for_uc_start)
         page = await browser.get("about:blank")
         # JavaScriptを実行してUser Agentを取得
         user_agent = await page.evaluate("navigator.userAgent")
@@ -146,11 +159,7 @@ async def _get_browser_with_ua(useragent):
         "--start-maximized",
     ]
     if not useragent:
-        return await uc.start(
-            browser_args=browser_args,
-            sandbox=False,
-            browser_executable_path="/root/.cache/ms-playwright/chromium-1223/chrome-linux64/chrome",
-        )
+        return await uc.start(browser_args=browser_args, **default_arg_for_uc_start)
     chrome_major_version = await get_browser_version()
     if not chrome_major_version:
         chrome_major_version = useragent.major
@@ -161,11 +170,7 @@ async def _get_browser_with_ua(useragent):
         f"Chrome/{chrome_major_version}.0.0.0 Safari/537.36"
     )
     browser_args.append(f"--user-agent={ua_template}")
-    return await uc.start(
-        browser_args=browser_args,
-        sandbox=False,
-        browser_executable_path="/root/.cache/ms-playwright/chromium-1223/chrome-linux64/chrome",
-    )
+    return await uc.start(browser_args=browser_args, **default_arg_for_uc_start)
 
 
 async def _get_page_with_ua(browser, useragent):
