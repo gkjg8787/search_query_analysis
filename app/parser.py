@@ -121,7 +121,7 @@ def extract_select_options(html_content: str) -> list[SelectData]:
     for select in soup.find_all("select"):
         # オプション群の抽出
         options = [
-            OptionData(value=opt.get("value"), text=opt.get_text(strip=True))
+            OptionData(value=opt.get("value", ""), text=opt.get_text(strip=True))
             for opt in select.find_all("option")
         ]
 
